@@ -1,0 +1,2127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PayPilot AI · Payment Operations Command Center</title>
+<meta name="description" content="Agentic PayPal sandbox operations with a hard human approval gate." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230a1020'/%3E%3Cpath d='M22 14h15c8 0 13 5 13 12s-5 12-13 12h-7l-2 12h-8l6-36z' fill='%2358a6ff'/%3E%3Cpath d='M30 22h7c3 0 5 2 5 4s-2 4-5 4h-6l-1 8h-7l3-16z' fill='%230a1020' opacity='.55'/%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.4/styles/ag-grid.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.4/styles/ag-theme-quartz-dark.css" />
+<script src="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.4/dist/ag-grid-community.min.js"></script>
+<style>
+  :root {
+    --bg: #05080f;
+    --bg-2: #070c16;
+    --panel: rgba(13, 20, 34, 0.78);
+    --panel-solid: #0b1220;
+    --panel-2: rgba(18, 27, 45, 0.72);
+    --ink: #e8eefb;
+    --muted: #93a3bd;
+    --faint: #5f6f89;
+    --border: rgba(148, 163, 184, 0.14);
+    --border-strong: rgba(148, 163, 184, 0.28);
+    --accent: #2f81f7;
+    --accent-2: #58a6ff;
+    --accent-soft: rgba(47, 129, 247, 0.14);
+    --ok: #3fb950;
+    --ok-soft: rgba(63, 185, 80, 0.13);
+    --warn: #d29922;
+    --warn-soft: rgba(210, 153, 34, 0.14);
+    --danger: #f85149;
+    --danger-soft: rgba(248, 81, 73, 0.13);
+    --violet: #a371f7;
+    --violet-soft: rgba(163, 113, 247, 0.14);
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
+    --sans: "Inter", "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif;
+    --radius: 16px;
+    --shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+    --shadow-soft: 0 12px 28px rgba(0, 0, 0, 0.28);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  html { color-scheme: dark; }
+  body {
+    font-family: var(--sans);
+    color: var(--ink);
+    line-height: 1.45;
+    background:
+      radial-gradient(900px 520px at 8% -8%, rgba(47, 129, 247, 0.20), transparent 60%),
+      radial-gradient(820px 500px at 96% 2%, rgba(163, 113, 247, 0.14), transparent 62%),
+      radial-gradient(1100px 700px at 50% 110%, rgba(63, 185, 80, 0.08), transparent 60%),
+      var(--bg);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background-image:
+      linear-gradient(rgba(148, 163, 184, 0.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(148, 163, 184, 0.035) 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: radial-gradient(ellipse at 50% 0%, black 20%, transparent 80%);
+  }
+  a { color: var(--accent-2); }
+  code, .mono { font-family: var(--mono); }
+  button { font-family: inherit; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.22); border-radius: 99px; border: 2px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.4); background-clip: padding-box; }
+
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    backdrop-filter: blur(18px);
+    background: linear-gradient(180deg, rgba(5, 8, 15, 0.92), rgba(5, 8, 15, 0.62));
+    border-bottom: 1px solid var(--border);
+  }
+  .topbar-inner {
+    max-width: 1880px;
+    margin: 0 auto;
+    padding: 14px clamp(16px, 2.4vw, 34px);
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    flex-wrap: wrap;
+  }
+  .brand { display: flex; align-items: center; gap: 13px; min-width: 250px; }
+  .logo {
+    width: 44px; height: 44px; border-radius: 13px;
+    display: grid; place-items: center;
+    background:
+      radial-gradient(circle at 30% 20%, rgba(255,255,255,0.35), transparent 40%),
+      linear-gradient(145deg, #2f81f7, #0a4fb8 70%);
+    box-shadow: 0 10px 26px rgba(47, 129, 247, 0.4), inset 0 1px 0 rgba(255,255,255,0.35);
+    color: #fff;
+  }
+  .logo svg { width: 25px; height: 25px; }
+  .brand-text h1 {
+    margin: 0;
+    font-size: 19px;
+    letter-spacing: -0.4px;
+    font-weight: 800;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+  .brand-text p {
+    margin: 2px 0 0;
+    color: var(--muted);
+    font-size: 11.5px;
+    letter-spacing: 0.2px;
+  }
+  .sandbox-badge {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: #ffd479;
+    background: rgba(210, 153, 34, 0.12);
+    border: 1px solid rgba(210, 153, 34, 0.3);
+    padding: 3px 7px;
+    border-radius: 6px;
+  }
+  .topbar-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    flex-wrap: wrap;
+  }
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: #d7e3f7;
+    background: rgba(148, 163, 184, 0.07);
+    border: 1px solid var(--border);
+    padding: 7px 11px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .status-pill .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--faint);
+    box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.08);
+  }
+  .status-pill .dot.on { background: var(--ok); box-shadow: 0 0 0 3px rgba(63, 185, 80, 0.14); }
+  .status-pill .dot.off { background: var(--danger); box-shadow: 0 0 0 3px rgba(248, 81, 73, 0.14); }
+  .status-pill .dot.warn { background: var(--warn); box-shadow: 0 0 0 3px rgba(210, 153, 34, 0.14); }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    border: 1px solid var(--border);
+    background: rgba(148, 163, 184, 0.07);
+    color: var(--ink);
+    border-radius: 10px;
+    padding: 8px 13px;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.16s ease, background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+    white-space: nowrap;
+  }
+  .btn:hover { background: rgba(148, 163, 184, 0.12); border-color: var(--border-strong); transform: translateY(-1px); }
+  .btn:active { transform: translateY(0); }
+  .btn:disabled { opacity: 0.5; cursor: wait; transform: none; }
+  .btn svg { width: 15px; height: 15px; }
+  .btn-primary {
+    background: linear-gradient(145deg, #2f81f7, #1b64d1);
+    border-color: rgba(88, 166, 255, 0.55);
+    color: #fff;
+    box-shadow: 0 8px 22px rgba(47, 129, 247, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  }
+  .btn-primary:hover { background: linear-gradient(145deg, #4a94ff, #2470db); }
+  .btn-ok {
+    background: linear-gradient(145deg, #2ea043, #1f7a32);
+    border-color: rgba(63, 185, 80, 0.5);
+    color: #fff;
+    box-shadow: 0 8px 22px rgba(46, 160, 67, 0.25);
+  }
+  .btn-ok:hover { background: linear-gradient(145deg, #3fb950, #248a39); }
+  .btn-danger {
+    background: rgba(248, 81, 73, 0.08);
+    border-color: rgba(248, 81, 73, 0.28);
+    color: #ffb3ae;
+  }
+  .btn-danger:hover { background: rgba(248, 81, 73, 0.16); border-color: rgba(248, 81, 73, 0.5); }
+  .btn-sm { padding: 6px 10px; font-size: 11.5px; border-radius: 8px; }
+  .btn-icon { padding: 7px; border-radius: 8px; }
+  .btn-icon svg { width: 14px; height: 14px; }
+
+  .shell {
+    max-width: 1880px;
+    margin: 0 auto;
+    padding: 18px clamp(16px, 2.4vw, 34px) 54px;
+    position: relative;
+  }
+
+  .config-banner {
+    display: none;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 13px 15px;
+    border: 1px solid rgba(210, 153, 34, 0.32);
+    background: linear-gradient(100deg, rgba(210, 153, 34, 0.13), rgba(210, 153, 34, 0.04));
+    border-radius: 12px;
+    margin-bottom: 16px;
+    font-size: 12.5px;
+    color: #f2d596;
+  }
+  .config-banner.show { display: flex; }
+  .config-banner strong { color: #ffe1a0; }
+  .config-banner code { background: rgba(0,0,0,0.25); padding: 1px 5px; border-radius: 5px; }
+  .config-banner svg { width: 16px; height: 16px; flex: 0 0 auto; color: var(--warn); margin-top: 1px; }
+
+  .safety-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .stat {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 13px 15px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    background: linear-gradient(160deg, rgba(18, 27, 45, 0.82), rgba(11, 18, 32, 0.62));
+    box-shadow: var(--shadow-soft);
+    overflow: hidden;
+  }
+  .stat::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(220px 120px at 100% 0%, var(--stat-glow, rgba(47,129,247,0.14)), transparent 70%);
+    pointer-events: none;
+  }
+  .stat-icon {
+    width: 34px; height: 34px;
+    border-radius: 10px;
+    display: grid; place-items: center;
+    background: var(--stat-glow, var(--accent-soft));
+    color: var(--stat-color, var(--accent-2));
+    flex: 0 0 auto;
+  }
+  .stat-icon svg { width: 18px; height: 18px; }
+  .stat-value { font-size: 20px; font-weight: 800; letter-spacing: -0.5px; line-height: 1.1; }
+  .stat-value.small { font-size: 14px; letter-spacing: 0; }
+  .stat-label { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .stat-hint { font-family: var(--mono); font-size: 9.5px; color: var(--faint); margin-top: 3px; letter-spacing: 0.2px; }
+  .stat.ok { --stat-color: var(--ok); --stat-glow: var(--ok-soft); }
+  .stat.warn { --stat-color: var(--warn); --stat-glow: var(--warn-soft); }
+  .stat.violet { --stat-color: var(--violet); --stat-glow: var(--violet-soft); }
+  .stat.danger { --stat-color: var(--danger); --stat-glow: var(--danger-soft); }
+
+  .workspace {
+    display: grid;
+    grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr) minmax(330px, 0.82fr);
+    gap: 16px;
+    align-items: start;
+  }
+  .panel {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--panel);
+    backdrop-filter: blur(16px);
+    box-shadow: var(--shadow-soft);
+    overflow: hidden;
+    min-width: 0;
+  }
+  .panel-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 13px 15px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, rgba(148,163,184,0.045), transparent);
+  }
+  .panel-head h2 {
+    margin: 0;
+    font-size: 12.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.9px;
+    font-weight: 700;
+    color: #c7d4e8;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .panel-head h2 svg { width: 15px; height: 15px; color: var(--accent-2); }
+  .panel-head .spacer { flex: 1; }
+  .panel-hint { font-size: 11px; color: var(--faint); }
+  .live-dot {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10.5px;
+    color: var(--muted);
+    font-family: var(--mono);
+  }
+  .live-dot::before {
+    content: "";
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--ok);
+    box-shadow: 0 0 0 0 rgba(63,185,80,0.5);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(63,185,80,0.45); }
+    70% { box-shadow: 0 0 0 8px rgba(63,185,80,0); }
+    100% { box-shadow: 0 0 0 0 rgba(63,185,80,0); }
+  }
+
+  .chat-panel { display: flex; flex-direction: column; height: min(760px, calc(100vh - 280px)); min-height: 560px; }
+  .chat-log {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    scroll-behavior: smooth;
+  }
+  .msg { display: flex; gap: 9px; max-width: 96%; animation: rise 0.24s ease both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  .msg.user { align-self: flex-end; flex-direction: row-reverse; }
+  .avatar {
+    flex: 0 0 29px; width: 29px; height: 29px;
+    border-radius: 9px;
+    display: grid; place-items: center;
+    font-size: 9.5px; font-weight: 800; letter-spacing: 0.4px;
+    background: rgba(148, 163, 184, 0.12);
+    color: #c8d5e8;
+    border: 1px solid var(--border);
+  }
+  .msg.assistant .avatar {
+    background: linear-gradient(145deg, rgba(47,129,247,0.3), rgba(163,113,247,0.18));
+    color: #cfe3ff;
+    border-color: rgba(88,166,255,0.3);
+  }
+  .msg.user .avatar { background: rgba(47, 129, 247, 0.18); color: #bcd9ff; }
+  .bubble {
+    min-width: 0;
+    padding: 11px 13px;
+    border-radius: 12px;
+    background: rgba(18, 27, 45, 0.76);
+    border: 1px solid var(--border);
+    font-size: 13px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .msg.user .bubble {
+    background: linear-gradient(145deg, rgba(47,129,247,0.22), rgba(47,129,247,0.10));
+    border-color: rgba(88, 166, 255, 0.28);
+  }
+  .msg.error .bubble { background: var(--danger-soft); border-color: rgba(248,81,73,0.32); color: #ffc2be; }
+
+  .trace { display: flex; flex-direction: column; gap: 7px; margin-bottom: 10px; }
+  .trace-step {
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: rgba(5, 8, 15, 0.42);
+    overflow: hidden;
+    font-size: 11.5px;
+  }
+  .trace-step summary {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 9px;
+    cursor: pointer;
+    list-style: none;
+    color: #c7d4e8;
+    font-weight: 500;
+  }
+  .trace-step summary::-webkit-details-marker { display: none; }
+  .trace-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent-2);
+    flex: 0 0 auto;
+    box-shadow: 0 0 0 3px rgba(88,166,255,0.12);
+  }
+  .trace-step.proposal .trace-dot { background: var(--warn); box-shadow: 0 0 0 3px rgba(210,153,34,0.12); }
+  .trace-step.error .trace-dot { background: var(--danger); box-shadow: 0 0 0 3px rgba(248,81,73,0.12); }
+  .trace-step.read .trace-dot { background: var(--ok); box-shadow: 0 0 0 3px rgba(63,185,80,0.12); }
+  .trace-badge {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 8.5px;
+    letter-spacing: 0.7px;
+    text-transform: uppercase;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+  .trace-step pre {
+    margin: 0;
+    padding: 9px;
+    border-top: 1px solid var(--border);
+    max-height: 240px;
+    overflow: auto;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    line-height: 1.45;
+    color: #a9bdd8;
+    white-space: pre-wrap;
+    background: rgba(0, 0, 0, 0.22);
+  }
+  .thinking {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+  }
+  .thinking-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #c7d4e8;
+    font-weight: 600;
+  }
+  .spinner {
+    width: 13px; height: 13px;
+    border-radius: 50%;
+    border: 2px solid rgba(88,166,255,0.25);
+    border-top-color: var(--accent-2);
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .think-line {
+    display: flex; align-items: center; gap: 8px;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--faint);
+    padding-left: 2px;
+  }
+  .think-line::before {
+    content: "";
+    width: 3px; height: 3px; border-radius: 50%;
+    background: var(--accent-2);
+    opacity: 0.8;
+  }
+  .think-line.dim { opacity: 0.5; }
+
+  .chips {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 9px 12px;
+    border-top: 1px solid var(--border);
+    background: rgba(5, 8, 15, 0.25);
+  }
+  .chip {
+    border: 1px solid var(--border);
+    background: rgba(148, 163, 184, 0.055);
+    color: #b8c8df;
+    border-radius: 999px;
+    padding: 5px 10px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: 0.16s ease;
+  }
+  .chip:hover { border-color: rgba(88,166,255,0.5); color: #dceaff; background: rgba(47,129,247,0.12); }
+  .chat-input {
+    display: flex;
+    gap: 8px;
+    padding: 10px 12px;
+    border-top: 1px solid var(--border);
+    background: rgba(5, 8, 15, 0.45);
+    align-items: flex-end;
+  }
+  .chat-input textarea {
+    flex: 1;
+    resize: none;
+    min-height: 42px;
+    max-height: 132px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: rgba(5, 8, 15, 0.55);
+    color: var(--ink);
+    padding: 10px 11px;
+    font: inherit;
+    font-size: 12.5px;
+    line-height: 1.4;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease;
+  }
+  .chat-input textarea:focus {
+    outline: none;
+    border-color: rgba(88,166,255,0.6);
+    box-shadow: 0 0 0 3px rgba(47,129,247,0.16);
+  }
+  .chat-input textarea::placeholder { color: var(--faint); }
+
+  .lifecycle-panel { display: flex; flex-direction: column; }
+  .lifecycle-body { padding: 15px; display: flex; flex-direction: column; gap: 14px; }
+  .selected-id-row {
+    display: flex; align-items: center; gap: 7px;
+    font-family: var(--mono); font-size: 10.5px; color: var(--faint);
+  }
+  .stepper {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0;
+    position: relative;
+    padding: 6px 0 2px;
+  }
+  .stepper::before {
+    content: "";
+    position: absolute;
+    left: 10%; right: 10%; top: 21px;
+    height: 2px;
+    background: linear-gradient(90deg, rgba(88,166,255,0.5), rgba(148,163,184,0.14));
+  }
+  .stage { position: relative; display: flex; flex-direction: column; align-items: center; gap: 7px; text-align: center; z-index: 1; }
+  .stage-node {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    display: grid; place-items: center;
+    background: var(--panel-solid);
+    border: 2px solid rgba(148, 163, 184, 0.25);
+    color: var(--faint);
+    font-size: 10px;
+    font-weight: 700;
+    transition: 0.2s ease;
+  }
+  .stage.done .stage-node {
+    background: rgba(47,129,247,0.18);
+    border-color: rgba(88,166,255,0.65);
+    color: #cfe3ff;
+    box-shadow: 0 0 0 4px rgba(47,129,247,0.08);
+  }
+  .stage.current .stage-node {
+    background: linear-gradient(145deg, #2f81f7, #1b64d1);
+    border-color: #8ec5ff;
+    color: #fff;
+    box-shadow: 0 0 0 5px rgba(47,129,247,0.18), 0 0 24px rgba(47,129,247,0.5);
+    animation: stageGlow 2.4s ease-in-out infinite;
+  }
+  @keyframes stageGlow {
+    0%, 100% { box-shadow: 0 0 0 5px rgba(47,129,247,0.16), 0 0 20px rgba(47,129,247,0.38); }
+    50% { box-shadow: 0 0 0 7px rgba(47,129,247,0.08), 0 0 30px rgba(47,129,247,0.6); }
+  }
+  .stage.failed .stage-node { background: var(--danger-soft); border-color: rgba(248,81,73,0.6); color: #ffb3ae; }
+  .stage-label { font-size: 9.5px; color: var(--faint); font-weight: 600; letter-spacing: 0.2px; line-height: 1.25; }
+  .stage.done .stage-label, .stage.current .stage-label { color: #b8cbe6; }
+
+  .detail-card {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: linear-gradient(160deg, rgba(18,27,45,0.7), rgba(5,8,15,0.3));
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .detail-top { display: flex; align-items: flex-start; gap: 12px; }
+  .detail-amount { min-width: 0; }
+  .detail-amount .label { font-size: 9.5px; text-transform: uppercase; letter-spacing: 1px; color: var(--faint); font-weight: 700; }
+  .detail-amount .value { font-size: clamp(24px, 2.4vw, 34px); font-weight: 800; letter-spacing: -1px; line-height: 1.05; margin-top: 3px; }
+  .detail-amount .value small { font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: 0.3px; margin-left: 5px; }
+  .detail-top .spacer { flex: 1; }
+  .status-pill-lg {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 5px 9px; border-radius: 7px;
+    font-family: var(--mono); font-size: 9.5px; font-weight: 700;
+    letter-spacing: 0.7px; text-transform: uppercase;
+    border: 1px solid var(--border);
+  }
+  .status-pill-lg .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .tone-ok { color: #7ee787; background: var(--ok-soft); border-color: rgba(63,185,80,0.28); }
+  .tone-warn { color: #e3b341; background: var(--warn-soft); border-color: rgba(210,153,34,0.3); }
+  .tone-danger { color: #ff9b95; background: var(--danger-soft); border-color: rgba(248,81,73,0.3); }
+  .tone-blue { color: #9ecbff; background: var(--accent-soft); border-color: rgba(88,166,255,0.3); }
+  .tone-violet { color: #c9a8ff; background: var(--violet-soft); border-color: rgba(163,113,247,0.3); }
+  .tone-neutral { color: #aebdd4; background: rgba(148,163,184,0.08); border-color: var(--border); }
+
+  .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+  .meta-item { min-width: 0; }
+  .meta-item .k { font-size: 9px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--faint); font-weight: 700; }
+  .meta-item .v { font-size: 11px; color: #c7d4e8; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
+  .meta-item.full { grid-column: 1 / -1; }
+  .copy-row {
+    display: flex; align-items: center; gap: 7px;
+    border: 1px solid var(--border);
+    background: rgba(5,8,15,0.35);
+    border-radius: 8px;
+    padding: 6px 8px;
+    min-width: 0;
+  }
+  .copy-row .k { font-size: 8.5px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--faint); font-weight: 700; flex: 0 0 auto; }
+  .copy-row code { font-size: 10.5px; color: #b8cbe6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .copy-btn {
+    border: none; background: transparent; color: var(--faint);
+    cursor: pointer; padding: 2px; border-radius: 4px; display: grid; place-items: center;
+  }
+  .copy-btn:hover { color: var(--accent-2); background: rgba(88,166,255,0.1); }
+  .copy-btn svg { width: 12px; height: 12px; }
+
+  .evidence { border: 1px solid var(--border); border-radius: 9px; background: rgba(5,8,15,0.26); overflow: hidden; }
+  .evidence summary {
+    cursor: pointer; list-style: none; padding: 8px 10px;
+    display: flex; align-items: center; gap: 7px;
+    font-size: 10.5px; color: var(--muted); font-weight: 600;
+  }
+  .evidence summary::-webkit-details-marker { display: none; }
+  .evidence summary::before { content: ""; width: 0; height: 0; border-left: 4px solid var(--faint); border-top: 4px solid transparent; border-bottom: 4px solid transparent; transition: transform 0.15s ease; }
+  .evidence[open] summary::before { transform: rotate(90deg); }
+  .evidence pre {
+    margin: 0; padding: 9px; border-top: 1px solid var(--border);
+    background: rgba(0,0,0,0.2);
+    font-family: var(--mono); font-size: 10px; line-height: 1.45;
+    color: #a9bdd8; max-height: 220px; overflow: auto; white-space: pre-wrap;
+  }
+  .center-actions { display: flex; gap: 7px; flex-wrap: wrap; }
+
+  .side-panel { display: flex; flex-direction: column; height: min(780px, calc(100vh - 260px)); min-height: 560px; }
+  .side-scroll { flex: 1; min-height: 0; overflow: hidden; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  #queueSection { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 3px; }
+  #activitySection { flex: 0 0 33%; min-height: 128px; overflow-y: auto; border-top: 1px solid var(--border); padding-top: 9px; }
+  #queueSection .section-label, #activitySection .section-label { position: sticky; top: 0; z-index: 1; background: rgba(9, 15, 26, 0.92); padding: 3px 2px 6px; backdrop-filter: blur(6px); }
+  .section-label {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 9.5px; letter-spacing: 1px; text-transform: uppercase;
+    color: var(--faint); font-weight: 700; margin: 2px 2px 0;
+  }
+  .section-label .count {
+    font-family: var(--mono); font-size: 9px; color: var(--muted);
+    background: rgba(148,163,184,0.1); border-radius: 999px; padding: 1px 6px;
+  }
+  .approval-card {
+    border: 1px solid var(--border);
+    border-radius: 13px;
+    background: linear-gradient(165deg, rgba(21, 31, 51, 0.9), rgba(9, 15, 26, 0.8));
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    container-type: inline-size;
+  }
+  .approval-card.pending { border-color: rgba(210, 153, 34, 0.28); box-shadow: 0 0 0 1px rgba(210,153,34,0.06); }
+  .approval-card.unknown { border-color: rgba(210, 153, 34, 0.42); background: linear-gradient(165deg, rgba(40, 33, 16, 0.55), rgba(9, 15, 26, 0.85)); }
+  .approval-card.flash { animation: flash 1.2s ease; }
+  @keyframes flash { 0%, 100% { box-shadow: none; } 30% { box-shadow: 0 0 0 3px rgba(88,166,255,0.35), 0 0 30px rgba(47,129,247,0.35); } }
+  .approval-top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+  .tool-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: var(--mono); font-size: 9px; font-weight: 700;
+    letter-spacing: 0.5px; text-transform: uppercase;
+    padding: 3px 6px; border-radius: 5px;
+    border: 1px solid var(--border);
+  }
+  .tool-chip svg { width: 11px; height: 11px; }
+  .tool-blue { color: #9ecbff; background: var(--accent-soft); border-color: rgba(88,166,255,0.3); }
+  .tool-green { color: #7ee787; background: var(--ok-soft); border-color: rgba(63,185,80,0.28); }
+  .tool-amber { color: #e3b341; background: var(--warn-soft); border-color: rgba(210,153,34,0.3); }
+  .tool-violet { color: #c9a8ff; background: var(--violet-soft); border-color: rgba(163,113,247,0.3); }
+  .approval-top .spacer { flex: 1; }
+  .mini-pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: var(--mono); font-size: 8.5px; font-weight: 700;
+    letter-spacing: 0.6px; text-transform: uppercase;
+    padding: 3px 6px; border-radius: 5px;
+    border: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .mini-pill .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+  .approval-title { font-size: 13px; font-weight: 700; letter-spacing: -0.15px; line-height: 1.35; margin: 0; }
+  .preview {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 7px;
+    align-items: stretch;
+  }
+  .preview-side {
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: rgba(5,8,15,0.35);
+    padding: 7px 9px;
+    min-width: 0;
+  }
+  .preview-side .k { font-size: 8px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--faint); font-weight: 700; }
+  .preview-side .v { font-size: 11px; color: #cbd8eb; margin-top: 2px; line-height: 1.35; overflow-wrap: anywhere; }
+  .preview-side.after { border-color: rgba(88,166,255,0.28); background: rgba(47,129,247,0.07); }
+  .preview-side.after .v { color: #dceaff; font-weight: 600; }
+  .preview-arrow { display: grid; place-items: center; color: var(--faint); }
+  .preview-arrow svg { width: 13px; height: 13px; }
+  @container (max-width: 330px) {
+    .preview { grid-template-columns: 1fr; }
+    .preview-arrow { display: none; }
+  }
+  .approval-args { border: 1px solid var(--border); border-radius: 8px; background: rgba(5,8,15,0.25); overflow: hidden; }
+  .approval-args summary {
+    cursor: pointer; list-style: none; padding: 6px 8px;
+    font-size: 9.5px; color: var(--faint); font-weight: 600;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .approval-args summary::-webkit-details-marker { display: none; }
+  .approval-args summary::before { content: ""; width: 0; height: 0; border-left: 4px solid var(--faint); border-top: 4px solid transparent; border-bottom: 4px solid transparent; transition: transform 0.15s ease; }
+  .approval-args[open] summary::before { transform: rotate(90deg); }
+  .approval-args pre {
+    margin: 0; padding: 8px; border-top: 1px solid var(--border);
+    font-family: var(--mono); font-size: 9.5px; line-height: 1.45;
+    color: #a9bdd8; max-height: 150px; overflow: auto; white-space: pre-wrap;
+    background: rgba(0,0,0,0.2);
+  }
+  .approval-actions { display: flex; gap: 6px; }
+  .approval-actions .btn { flex: 1; }
+  .approval-actions .btn-icon-only { flex: 0 0 auto; }
+  .safety-note {
+    display: flex; align-items: flex-start; gap: 6px;
+    font-size: 9.5px; color: var(--faint); line-height: 1.4;
+  }
+  .safety-note svg { width: 12px; height: 12px; flex: 0 0 auto; margin-top: 1px; color: var(--ok); }
+  .result-box {
+    display: none;
+    border-radius: 8px;
+    padding: 8px 9px;
+    font-size: 10.5px;
+    line-height: 1.45;
+    border: 1px solid var(--border);
+    background: rgba(5,8,15,0.4);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 220px;
+    overflow: auto;
+  }
+  .result-box.show { display: block; }
+  .result-box.error { border-color: rgba(248,81,73,0.35); background: var(--danger-soft); color: #ffc2be; }
+  .result-box.warn { border-color: rgba(210,153,34,0.35); background: var(--warn-soft); color: #f2d596; }
+  .result-box.ok { border-color: rgba(63,185,80,0.3); background: var(--ok-soft); color: #b7f0bd; }
+
+  .activity-item {
+    display: flex;
+    gap: 9px;
+    padding: 8px 2px;
+    border-bottom: 1px solid rgba(148,163,184,0.08);
+    font-size: 10.5px;
+    align-items: flex-start;
+  }
+  .activity-item:last-child { border-bottom: none; }
+  .activity-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    margin-top: 4px; flex: 0 0 auto;
+    background: var(--accent-2);
+    box-shadow: 0 0 0 3px rgba(88,166,255,0.1);
+  }
+  .activity-item.ok .activity-dot { background: var(--ok); box-shadow: 0 0 0 3px rgba(63,185,80,0.1); }
+  .activity-item.warn .activity-dot { background: var(--warn); box-shadow: 0 0 0 3px rgba(210,153,34,0.1); }
+  .activity-item.error .activity-dot { background: var(--danger); box-shadow: 0 0 0 3px rgba(248,81,73,0.1); }
+  .activity-body { min-width: 0; flex: 1; }
+  .activity-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .activity-tool { font-family: var(--mono); font-size: 9.5px; color: #c7d4e8; font-weight: 600; }
+  .activity-actor { font-size: 8.5px; color: var(--faint); text-transform: uppercase; letter-spacing: 0.5px; }
+  .activity-time { margin-left: auto; font-family: var(--mono); font-size: 8.5px; color: var(--faint); }
+  .activity-msg { color: var(--muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .empty-state {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; gap: 7px;
+    padding: 26px 14px;
+    color: var(--faint);
+    border: 1px dashed var(--border);
+    border-radius: 12px;
+    background: rgba(5,8,15,0.22);
+  }
+  .empty-state svg { width: 24px; height: 24px; color: #45566f; }
+  .empty-state strong { color: #9fb0c9; font-size: 11.5px; font-weight: 600; }
+  .empty-state span { font-size: 10.5px; max-width: 260px; line-height: 1.5; }
+
+  .skeleton { display: flex; flex-direction: column; gap: 8px; padding: 3px; }
+  .sk-line {
+    height: 10px; border-radius: 6px;
+    background: linear-gradient(90deg, rgba(148,163,184,0.08), rgba(148,163,184,0.16), rgba(148,163,184,0.08));
+    background-size: 200% 100%;
+    animation: shimmer 1.4s infinite;
+  }
+  .sk-line.w70 { width: 70%; }
+  .sk-line.w50 { width: 50%; }
+  .sk-card { height: 92px; border-radius: 12px; }
+  @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+  .datagrids {
+    display: grid;
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+    gap: 16px;
+    margin-top: 16px;
+  }
+  .grid-panel { display: flex; flex-direction: column; }
+  .grid-wrap { height: 340px; width: 100%; }
+  .grid-fallback { height: 100%; overflow: auto; padding: 8px; font-size: 10.5px; }
+  .grid-fallback table { width: 100%; border-collapse: collapse; }
+  .grid-fallback th, .grid-fallback td { text-align: left; padding: 6px 7px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  .grid-fallback th { color: var(--faint); font-size: 9px; text-transform: uppercase; letter-spacing: 0.6px; }
+  .grid-fallback td { color: #b8c8df; }
+  .grid-fallback .mono { font-family: var(--mono); font-size: 9.5px; }
+
+  .ag-theme-quartz-dark {
+    --ag-background-color: transparent;
+    --ag-foreground-color: #c7d4e8;
+    --ag-header-background-color: rgba(148, 163, 184, 0.06);
+    --ag-header-foreground-color: #93a3bd;
+    --ag-border-color: rgba(148, 163, 184, 0.14);
+    --ag-row-border-color: rgba(148, 163, 184, 0.08);
+    --ag-row-hover-color: rgba(47, 129, 247, 0.08);
+    --ag-selected-row-background-color: rgba(47, 129, 247, 0.16);
+    --ag-font-family: var(--sans);
+    --ag-font-size: 10.5px;
+    --ag-header-height: 32px;
+    --ag-row-height: 32px;
+    --ag-input-focus-border-color: rgba(88, 166, 255, 0.6);
+    --ag-checkbox-background-color: rgba(5, 8, 15, 0.5);
+    --ag-odd-row-background-color: rgba(148, 163, 184, 0.018);
+  }
+  .ag-theme-quartz-dark .ag-root-wrapper { border: none; background: transparent; }
+  .ag-theme-quartz-dark .ag-header { border-bottom: 1px solid var(--border); }
+  .ag-theme-quartz-dark .ag-paging-panel { border-top: 1px solid var(--border); color: var(--muted); font-size: 10px; height: 34px; }
+  .ag-theme-quartz-dark .ag-icon { color: var(--muted); }
+  .ag-theme-quartz-dark .ag-row { cursor: pointer; }
+  .ag-theme-quartz-dark .ag-cell { line-height: 32px; }
+
+  .modal-backdrop {
+    position: fixed; inset: 0; z-index: 80;
+    background: rgba(2, 5, 10, 0.7);
+    backdrop-filter: blur(6px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 18px;
+  }
+  .modal-backdrop.show { display: flex; }
+  .modal {
+    width: min(560px, 100%);
+    max-height: min(86vh, 760px);
+    overflow: auto;
+    border: 1px solid var(--border-strong);
+    border-radius: 18px;
+    background: linear-gradient(165deg, rgba(21, 31, 51, 0.98), rgba(7, 12, 22, 0.99));
+    box-shadow: var(--shadow);
+    animation: modalIn 0.22s ease both;
+  }
+  @keyframes modalIn { from { opacity: 0; transform: translateY(10px) scale(0.985); } to { opacity: 1; transform: none; } }
+  .modal-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 14px 16px; border-bottom: 1px solid var(--border);
+    position: sticky; top: 0;
+    background: rgba(15, 23, 39, 0.96);
+    backdrop-filter: blur(10px);
+    z-index: 1;
+  }
+  .modal-head h3 { margin: 0; font-size: 14px; letter-spacing: -0.2px; }
+  .modal-head .spacer { flex: 1; }
+  .modal-body { padding: 16px; display: flex; flex-direction: column; gap: 13px; }
+  .demo-hero {
+    border-radius: 13px;
+    border: 1px solid rgba(88,166,255,0.28);
+    background: linear-gradient(145deg, rgba(47,129,247,0.16), rgba(163,113,247,0.07));
+    padding: 13px;
+  }
+  .demo-hero h4 { margin: 0 0 4px; font-size: 13px; }
+  .demo-hero p { margin: 0; font-size: 11.5px; color: var(--muted); line-height: 1.55; }
+  .demo-row { display: flex; gap: 7px; flex-wrap: wrap; }
+  .demo-link {
+    display: inline-flex; align-items: center; gap: 7px;
+    border-radius: 9px; padding: 8px 12px;
+    background: rgba(47,129,247,0.16);
+    border: 1px solid rgba(88,166,255,0.35);
+    color: #cfe3ff; font-size: 11.5px; font-weight: 600;
+    text-decoration: none; word-break: break-all;
+  }
+  .demo-link:hover { background: rgba(47,129,247,0.24); }
+  .demo-meta { display: flex; flex-direction: column; gap: 7px; }
+  .demo-note { font-size: 10.5px; color: var(--faint); line-height: 1.55; }
+
+  .toasts {
+    position: fixed; right: 18px; bottom: 18px; z-index: 120;
+    display: flex; flex-direction: column; gap: 8px; max-width: min(380px, 90vw);
+  }
+  .toast {
+    display: flex; align-items: flex-start; gap: 8px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border-strong);
+    background: rgba(13, 20, 34, 0.97);
+    box-shadow: var(--shadow);
+    font-size: 11.5px;
+    color: #d7e3f7;
+    animation: toastIn 0.22s ease both;
+  }
+  .toast .bar { width: 3px; align-self: stretch; border-radius: 99px; background: var(--accent-2); flex: 0 0 auto; }
+  .toast.ok .bar { background: var(--ok); }
+  .toast.warn .bar { background: var(--warn); }
+  .toast.error .bar { background: var(--danger); }
+  @keyframes toastIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+  footer {
+    max-width: 1880px;
+    margin: 0 auto;
+    padding: 18px clamp(16px, 2.4vw, 34px) 30px;
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    color: var(--faint); font-size: 10px;
+    border-top: 1px solid rgba(148,163,184,0.08);
+  }
+  footer .sep { width: 1px; height: 10px; background: var(--border); }
+  footer .mono { font-family: var(--mono); }
+
+  @media (max-width: 1279px) {
+    .workspace { grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr); }
+    .side-panel { grid-column: 1 / -1; height: auto; max-height: none; min-height: 0; }
+    .side-scroll { display: grid; grid-template-columns: 1fr 1fr; align-items: start; overflow: visible; }
+    .side-scroll .section-label { grid-column: 1 / -1; position: static; background: transparent; backdrop-filter: none; }
+    .side-scroll #queueSection, .side-scroll #activitySection { min-width: 0; overflow: visible; border-top: none; padding-top: 0; }
+    .chat-panel { height: min(700px, calc(100vh - 300px)); }
+  }
+  @media (max-width: 1080px) {
+    .safety-strip { grid-template-columns: 1fr 1fr; }
+    .datagrids { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 860px) {
+    .workspace { grid-template-columns: 1fr; }
+    .side-panel { grid-column: auto; }
+    .side-scroll { grid-template-columns: 1fr; }
+    .chat-panel { height: auto; min-height: 520px; }
+    .chat-log { max-height: 460px; }
+    .topbar-right { width: 100%; margin-left: 0; }
+    .brand { min-width: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+    html { scroll-behavior: auto; }
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M7 4h7.3c4 0 6.4 2.3 6.4 5.8 0 3.7-2.5 6.1-6.7 6.1h-3.4L9.4 22H5.2L7 4Z" fill="currentColor" opacity=".95"/><path d="M10.2 8.2h4.2c1.7 0 2.7.8 2.7 2.1 0 1.5-1.1 2.3-3 2.3h-3.2l-.7 4h-2.2l2.2-8.4Z" fill="#0a1020" opacity=".5"/></svg>
+      </div>
+      <div class="brand-text">
+        <h1>PayPilot AI <span class="sandbox-badge">Sandbox</span></h1>
+        <p>Agentic payment operations · human approval required</p>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <span class="status-pill"><span id="paypalDot" class="dot"></span>PayPal <span id="paypalStatus">checking</span></span>
+      <span class="status-pill"><span id="llmDot" class="dot"></span>LLM <span id="llmStatus">checking</span></span>
+      <button id="demoBtn" class="btn btn-primary" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z" stroke-linejoin="round"/></svg>
+        Demo mode
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="shell">
+  <div id="configBanner" class="config-banner" role="status"></div>
+
+  <section class="safety-strip" aria-label="Safety posture">
+    <div class="stat ok">
+      <div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3 5 6v5.5c0 4.3 3 7.4 7 8.5 4-1.1 7-4.2 7-8.5V6l-7-3Z" stroke-linejoin="round"/><path d="m9 12 2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div>
+        <div class="stat-value small">HUMAN GATE ON</div>
+        <div class="stat-label">Every write needs approval</div>
+        <div class="stat-hint">LLM can propose, never execute</div>
+      </div>
+    </div>
+    <div class="stat">
+      <div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 12h16M12 4v16" stroke-linecap="round"/><circle cx="12" cy="12" r="9"/></svg></div>
+      <div>
+        <div id="statExecuted" class="stat-value">0</div>
+        <div class="stat-label">Executions</div>
+        <div class="stat-hint">single-claim, idempotent</div>
+      </div>
+    </div>
+    <div class="stat warn">
+      <div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 9v4m0 4h.01M10.3 3.9 2.6 17.2A1.5 1.5 0 0 0 3.9 19.5h16.2a1.5 1.5 0 0 0 1.3-2.3L13.7 3.9a2 2 0 0 0-3.4 0Z" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div>
+        <div id="statBlocked" class="stat-value">0</div>
+        <div class="stat-label">Writes blocked</div>
+        <div class="stat-hint">rejected or validation-stopped</div>
+      </div>
+    </div>
+    <div class="stat violet">
+      <div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div>
+        <div id="statUnknown" class="stat-value">0</div>
+        <div class="stat-label">Ambiguous states</div>
+        <div class="stat-hint">reconcile from live PayPal</div>
+      </div>
+    </div>
+  </section>
+
+  <main class="workspace">
+    <section class="panel chat-panel" aria-label="Operations copilot">
+      <div class="panel-head">
+        <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8Z" stroke-linejoin="round"/><path d="M8 11h8M8 15h5" stroke-linecap="round"/></svg> Operations Copilot</h2>
+        <div class="spacer"></div>
+        <span class="live-dot">live</span>
+      </div>
+      <div id="chatLog" class="chat-log" aria-live="polite"></div>
+      <div class="chips">
+        <button class="chip" data-prompt="Investigate my most recent order using live PayPal data.">Investigate latest order</button>
+        <button class="chip" data-prompt="List the transactions you know about and summarize their real status.">List transactions</button>
+        <button class="chip" data-prompt="Create a sandbox order for 25.00 USD for consulting services.">Create a $25 order</button>
+        <button class="chip" data-prompt="Explain the safety model: how proposals, approvals, idempotency and reconciliation work.">Explain safety</button>
+      </div>
+      <div class="chat-input">
+        <textarea id="chatInput" rows="1" placeholder="Ask about an order, or request a refund, capture or invoice..." aria-label="Message PayPilot"></textarea>
+        <button id="sendBtn" class="btn btn-primary" type="button" title="Send (Enter)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m4 4 17 8-17 8 3-8-3-8Z" stroke-linejoin="round"/><path d="M7 12h14" stroke-linecap="round"/></svg>
+          Send
+        </button>
+      </div>
+    </section>
+
+    <section class="panel lifecycle-panel" aria-label="Payment lifecycle">
+      <div class="panel-head">
+        <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h4l2-6 4 12 2-6h6" stroke-linecap="round" stroke-linejoin="round"/></svg> Payment Lifecycle</h2>
+        <div class="spacer"></div>
+        <span id="selectedKind" class="panel-hint">no selection</span>
+      </div>
+      <div class="lifecycle-body">
+        <div id="selectedIdRow" class="selected-id-row"></div>
+        <div id="stepper" class="stepper"></div>
+        <div id="detailCard" class="detail-card"></div>
+        <div id="centerActions" class="center-actions"></div>
+      </div>
+    </section>
+
+    <aside class="panel side-panel" aria-label="Approvals and activity">
+      <div class="panel-head">
+        <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 11l3 3 8-8" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9" stroke-linecap="round"/></svg> Approval Queue</h2>
+        <div class="spacer"></div>
+        <button id="refreshBtn" class="btn btn-sm btn-icon" type="button" title="Refresh live state" aria-label="Refresh">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+      <div class="side-scroll">
+        <div id="queueSection">
+          <div class="section-label">Awaiting you <span id="queueCount" class="count">0</span></div>
+          <div id="pendingList"></div>
+        </div>
+        <div id="activitySection">
+          <div class="section-label">Activity <span class="count">live audit</span></div>
+          <div id="activityList"></div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <section class="datagrids">
+    <section class="panel grid-panel">
+      <div class="panel-head">
+        <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11" stroke-linecap="round"/></svg> Transactions</h2>
+        <div class="spacer"></div>
+        <span class="panel-hint">local registry · click a row</span>
+      </div>
+      <div id="txnGrid" class="ag-theme-quartz-dark grid-wrap"></div>
+    </section>
+    <section class="panel grid-panel">
+      <div class="panel-head">
+        <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 2h9l5 5v15H6V2Z" stroke-linejoin="round"/><path d="M15 2v5h5M9 12h6M9 16h6" stroke-linecap="round"/></svg> Audit Log</h2>
+        <div class="spacer"></div>
+        <span class="panel-hint">every read · every decision</span>
+      </div>
+      <div id="auditGrid" class="ag-theme-quartz-dark grid-wrap"></div>
+    </section>
+  </section>
+</div>
+
+<footer>
+  <span class="mono">PayPilot AI</span>
+  <span class="sep"></span>
+  <span>Sandbox only</span>
+  <span class="sep"></span>
+  <span>Human approval gate</span>
+  <span class="sep"></span>
+  <span>Idempotent writes</span>
+  <span class="sep"></span>
+  <span id="dbPath" class="mono"></span>
+</footer>
+
+<div id="demoModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="demoModalTitle">
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="demoModalTitle">Demo mode</h3>
+      <div class="spacer"></div>
+      <button id="closeDemoModal" class="btn btn-sm btn-icon" type="button" aria-label="Close demo mode">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6 6 18" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div id="demoBody" class="modal-body"></div>
+  </div>
+</div>
+
+<div id="toasts" class="toasts" aria-live="polite"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  const $ = (sel, root) => (root || document).querySelector(sel);
+  const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
+
+  const ICONS = {
+    copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10" stroke-linecap="round"/></svg>',
+    arrow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 12h16M14 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3 5 6v5.5c0 4.3 3 7.4 7 8.5 4-1.1 7-4.2 7-8.5V6l-7-3Z" stroke-linejoin="round"/><path d="m9 12 2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 12 4 4L19 6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    alert: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 9v4m0 4h.01M10.3 3.9 2.6 17.2A1.5 1.5 0 0 0 3.9 19.5h16.2a1.5 1.5 0 0 0 1.3-2.3L13.7 3.9a2 2 0 0 0-3.4 0Z" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m4 4 17 8-17 8 3-8-3-8Z" stroke-linejoin="round"/></svg>',
+    bolt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z" stroke-linejoin="round"/></svg>',
+    external: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3h7v7M21 3l-9 9M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    money: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 9v6M18 9v6" stroke-linecap="round"/></svg>',
+    refund: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 14 4 9l5-5" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 9h11a5 5 0 0 1 0 10h-3" stroke-linecap="round"/></svg>',
+    invoice: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 2h12v20l-3-2-3 2-3-2-3 2V2Z" stroke-linejoin="round"/><path d="M9 7h6M9 11h6M9 15h4" stroke-linecap="round"/></svg>',
+    refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+  };
+
+  const TOOL_META = {
+    create_order: { label: "Create order", cls: "tool-blue", icon: ICONS.bolt, risk: "New payment" },
+    capture_order: { label: "Capture payment", cls: "tool-green", icon: ICONS.money, risk: "Moves money" },
+    refund_capture: { label: "Refund payment", cls: "tool-amber", icon: ICONS.refund, risk: "Sends money back" },
+    create_invoice: { label: "Send invoice", cls: "tool-violet", icon: ICONS.invoice, risk: "Sends a bill" }
+  };
+
+  let history = [];
+  let sending = false;
+  let txnGrid = null;
+  let auditGrid = null;
+  let transactions = [];
+  let audits = [];
+  let actions = [];
+  let selectedTxnId = null;
+  let lastOrderId = null;
+  let demoSeed = null;
+  let health = null;
+  let loading = { actions: true, transactions: true, audit: true };
+
+  try { lastOrderId = localStorage.getItem("paypilot.lastOrderId") || null; } catch (e) { lastOrderId = null; }
+
+  function esc(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+  }
+
+  function shortId(value) {
+    if (!value) return "—";
+    const text = String(value);
+    return text.length > 18 ? text.slice(0, 8) + "…" + text.slice(-5) : text;
+  }
+
+  function money(amount, currency) {
+    if (amount === null || amount === undefined || amount === "") return "—";
+    const numeric = Number(amount);
+    const fixed = Number.isNaN(numeric)
+      ? String(amount)
+      : numeric.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return currency ? currency + " " + fixed : fixed;
+  }
+
+  function jsonText(value) {
+    if (value === null || value === undefined) return "";
+    try { return JSON.stringify(value); } catch (e) { return String(value); }
+  }
+
+  function jsonPretty(value) {
+    if (value === null || value === undefined) return "";
+    try { return JSON.stringify(value, null, 2); } catch (e) { return String(value); }
+  }
+
+  function fmtTime(iso) {
+    if (!iso) return "—";
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return String(iso).slice(11, 19) || String(iso);
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  }
+
+  function statusTone(status) {
+    const value = String(status || "").toUpperCase();
+    if (["COMPLETED", "APPROVED", "SENT", "REFUNDED", "APPROVED"].includes(value)) return "ok";
+    if (["FAILED", "DECLINED", "DENIED", "REJECTED", "ERROR"].includes(value)) return "danger";
+    if (["PARTIALLY_REFUNDED", "PENDING", "PAYER_ACTION_REQUIRED", "CREATED", "DRAFT", "SAVED", "EXECUTING", "UNKNOWN"].includes(value)) return "warn";
+    return "neutral";
+  }
+
+  function actionLabel(tool) {
+    const labels = {
+      "create_order": "Create order",
+      "capture_order": "Capture payment",
+      "refund_capture": "Refund payment",
+      "create_invoice": "Send invoice",
+      "get_order": "Look up order",
+      "get_capture": "Look up capture",
+      "list_local_transactions": "List transactions"
+    };
+    return labels[tool] || tool || "—";
+  }
+
+  function toast(message, type) {
+    const stack = $("#toasts");
+    const el = document.createElement("div");
+    el.className = "toast " + (type || "info");
+    const bar = document.createElement("div");
+    bar.className = "bar";
+    const text = document.createElement("div");
+    text.textContent = message;
+    el.appendChild(bar);
+    el.appendChild(text);
+    stack.appendChild(el);
+    setTimeout(function () {
+      el.style.opacity = "0";
+      el.style.transform = "translateY(6px)";
+      el.style.transition = "0.2s ease";
+      setTimeout(function () { el.remove(); }, 220);
+    }, 4200);
+  }
+
+  async function copyText(value) {
+    const text = String(value == null ? "" : value);
+    if (!text) return;
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const area = document.createElement("textarea");
+        area.value = text;
+        area.style.position = "fixed";
+        area.style.opacity = "0";
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand("copy");
+        area.remove();
+      }
+      toast("Copied " + shortId(text), "ok");
+    } catch (e) {
+      toast("Copy failed", "error");
+    }
+  }
+
+  async function api(path, options) {
+    const opts = Object.assign({ headers: { "Content-Type": "application/json" } }, options || {});
+    let response;
+    try {
+      response = await fetch(path, opts);
+    } catch (e) {
+      const failure = new Error(
+        "Network error calling " + path + ": " + (e && e.message ? e.message : "Failed to fetch")
+      );
+      failure.status = 0;
+      failure.path = path;
+      throw failure;
+    }
+    let data = null;
+    try { data = await response.json(); } catch (e) { data = null; }
+    if (!response.ok) {
+      const error = (data && data.error) ? data.error : {};
+      const message = error.message || "HTTP " + response.status;
+      const failure = new Error(path + " returned " + response.status + ": " + message);
+      failure.payload = data;
+      failure.status = response.status;
+      failure.path = path;
+      throw failure;
+    }
+    return data;
+  }
+
+  function setStatusPill(dotId, textId, state, text) {
+    const dot = $("#" + dotId);
+    if (dot) dot.className = "dot " + state;
+    const label = $("#" + textId);
+    if (label) label.textContent = text;
+  }
+
+  async function loadHealth() {
+    try {
+      const data = await api("/api/health");
+      health = data;
+      // Use connectivity status for badge color; configured status for text.
+      const paypalState = data.paypal_connected ? "on" : (data.paypal_configured ? "warn" : "off");
+      const paypalText = data.paypal_connected
+        ? "connected"
+        : data.paypal_configured
+          ? "configured, not reachable"
+          : "keys missing";
+      const llmState = data.llm_connected ? "on" : (data.llm_configured ? "warn" : "off");
+      const llmText = data.llm_connected
+        ? data.llm_model
+        : data.llm_configured
+          ? "configured, not reachable"
+          : "key missing";
+      setStatusPill("paypalDot", "paypalStatus", paypalState, paypalText);
+      setStatusPill("llmDot", "llmStatus", llmState, llmText);
+      const dbPath = $("#dbPath");
+      if (dbPath) dbPath.textContent = data.database || "";
+      renderConfigBanner();
+    } catch (e) {
+      setStatusPill("paypalDot", "paypalStatus", "off", "unreachable");
+      setStatusPill("llmDot", "llmStatus", "off", "unreachable");
+    }
+  }
+
+  function renderConfigBanner() {
+    const banner = $("#configBanner");
+    if (!health) { banner.classList.remove("show"); return; }
+    const missing = [];
+    if (!health.paypal_configured) missing.push("PAYPAL_CLIENT_ID + PAYPAL_CLIENT_SECRET");
+    if (!health.llm_configured) missing.push("LLM_API_KEY");
+    if (!missing.length) { banner.classList.remove("show"); banner.innerHTML = ""; return; }
+    banner.innerHTML = "<div>" + ICONS.alert + "</div><div><strong>Setup required.</strong> Add " +
+      missing.map(function (item) { return "<code>" + esc(item) + "</code>"; }).join(" and ") +
+      " to <code>.env</code>, then restart. The UI, safety gate and audit trail work without them; live PayPal and LLM calls stay disabled.</div>";
+    banner.classList.add("show");
+  }
+
+  function addMessage(role, text, steps, isError) {
+    const wrap = document.createElement("div");
+    wrap.className = "msg " + (role === "user" ? "user" : "assistant") + (isError ? " error" : "");
+    const avatar = document.createElement("div");
+    avatar.className = "avatar";
+    avatar.textContent = role === "user" ? "YOU" : "AI";
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    if (steps && steps.length) bubble.appendChild(renderTrace(steps));
+    if (text) {
+      const node = document.createElement("div");
+      node.textContent = text;
+      bubble.appendChild(node);
+    }
+    wrap.appendChild(avatar);
+    wrap.appendChild(bubble);
+    const log = $("#chatLog");
+    log.appendChild(wrap);
+    log.scrollTop = log.scrollHeight;
+    return wrap;
+  }
+
+  function stepPayload(step) {
+    if (step.type === "proposal") {
+      const a = step.args || {};
+      if (step.tool === "create_order") return "Create order: " + money(a.amount, a.currency) + " - " + (a.description || "");
+      if (step.tool === "capture_order") return "Capture payment for order " + shortId(a.order_id);
+      if (step.tool === "refund_capture") return "Refund of " + shortId(a.capture_id) + (a.amount ? " for " + money(a.amount) : "");
+      if (step.tool === "create_invoice") return "Send invoice to " + (a.recipient_email || "recipient");
+      return step.summary || "Proposed action";
+    }
+    if (step.type === "read") return step.summary || "Retrieved data";
+    if (step.type === "error") return step.summary || "Action failed";
+    return step.summary || "Step completed";
+  }
+
+  function renderTrace(steps) {
+    const wrap = document.createElement("div");
+    wrap.className = "trace";
+    steps.forEach(function (step) {
+      const details = document.createElement("details");
+      const type = step.type || "read";
+      details.className = "trace-step " + type;
+      const summary = document.createElement("summary");
+      const dot = document.createElement("span");
+      dot.className = "trace-dot";
+      const label = document.createElement("span");
+      label.textContent = step.summary || step.tool || "Step";
+      const badge = document.createElement("span");
+      badge.className = "trace-badge";
+      badge.textContent = type === "proposal" ? "proposal" : type;
+      summary.appendChild(dot);
+      summary.appendChild(label);
+      summary.appendChild(badge);
+      const pre = document.createElement("pre");
+      pre.textContent = stepPayload(step);
+      details.appendChild(summary);
+      details.appendChild(pre);
+      wrap.appendChild(details);
+    });
+    return wrap;
+  }
+
+  function addThinking() {
+    const wrap = document.createElement("div");
+    wrap.className = "msg assistant";
+    wrap.id = "thinkingMsg";
+    const avatar = document.createElement("div");
+    avatar.className = "avatar";
+    avatar.textContent = "AI";
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    bubble.innerHTML =
+      '<div class="thinking">' +
+        '<div class="thinking-head"><span class="spinner"></span> Reasoning over live data</div>' +
+        '<div class="think-line">Reading PayPal account state</div>' +
+        '<div class="think-line dim">Checking IDs, status and amounts</div>' +
+        '<div class="think-line dim">Preparing evidence and actions</div>' +
+      '</div>';
+    wrap.appendChild(avatar);
+    wrap.appendChild(bubble);
+    const log = $("#chatLog");
+    log.appendChild(wrap);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function clearThinking() {
+    const node = $("#thinkingMsg");
+    if (node) node.remove();
+  }
+
+  async function send(message) {
+    const input = $("#chatInput");
+    const text = String(message || input.value || "").trim();
+    if (!text || sending) return;
+    if (!health || !health.llm_configured) {
+      addMessage("assistant",
+        "LLM is not configured. Add LLM_API_KEY and LLM_MODEL to your .env file, " +
+        "then restart the server. The agent can still read local data and propose " +
+        "actions, but live LLM responses require a configured model.",
+        [], true);
+      sending = false;
+      return;
+    }
+    sending = true;
+    const sendBtn = $("#sendBtn");
+    sendBtn.disabled = true;
+    input.value = "";
+    input.style.height = "auto";
+    addMessage("user", text);
+    addThinking();
+    try {
+      const data = await api("/api/chat", {
+        method: "POST",
+        body: JSON.stringify({ message: text, history: history })
+      });
+      clearThinking();
+      addMessage("assistant", data.reply || "(no reply)", data.steps || []);
+      history.push({ role: "user", content: text });
+      history.push({ role: "assistant", content: data.reply || "" });
+      if (history.length > 20) history = history.slice(-20);
+      if (data.pending_actions && data.pending_actions.length) {
+        toast("The agent prepared " + data.pending_actions.length + " action(s). Nothing was executed.", "warn");
+      }
+      await refreshAll();
+    } catch (e) {
+      clearThinking();
+      const msg = e.message || "An error occurred.";
+      let friendly = msg;
+      if (msg.includes("LLM configuration is missing")) {
+        friendly = "The AI assistant is not configured. Please add your LLM credentials to the .env file and restart the server.";
+      } else if (msg.includes("PayPal credentials are missing")) {
+        friendly = "PayPal is not configured. Please add your PayPal sandbox credentials to the .env file and restart the server.";
+      } else if (msg.includes("was not found")) {
+        friendly = "The requested action could not be found. It may have already been resolved.";
+      } else if (msg.includes("already")) {
+        friendly = "This action has already been resolved and cannot be changed again.";
+      }
+      addMessage("assistant", friendly, [], true);
+      toast(friendly, "error");
+    } finally {
+      sending = false;
+      sendBtn.disabled = false;
+      input.focus();
+    }
+  }
+
+  function selectedTransaction() {
+    if (!transactions.length) return null;
+    if (selectedTxnId) {
+      const found = transactions.find(function (item) { return String(item.id) === String(selectedTxnId); });
+      if (found) return found;
+    }
+    return transactions[0];
+  }
+
+  function selectTransaction(txn) {
+    if (!txn) return;
+    selectedTxnId = txn.id;
+    renderLifecycle();
+  }
+
+  function stageIndex(kind, status) {
+    const value = String(status || "").toUpperCase();
+    if (kind === "invoice") return value === "SENT" ? 1 : 0;
+    if (kind === "refund") return value === "COMPLETED" ? 2 : 1;
+    if (!value || value === "CREATED" || value === "SAVED") return 0;
+    if (value === "APPROVED" || value === "PAYER_ACTION_REQUIRED") return 1;
+    if (value === "COMPLETED") return 2;
+    if (value === "PARTIALLY_REFUNDED" || value === "REFUNDED") return 3;
+    return 0;
+  }
+
+  function renderLifecycle() {
+    const txn = selectedTransaction();
+    const stepper = $("#stepper");
+    const detail = $("#detailCard");
+    const selectedRow = $("#selectedIdRow");
+    const kindLabel = $("#selectedKind");
+    const centerActions = $("#centerActions");
+
+    if (!txn) {
+      stepper.innerHTML = "";
+      selectedRow.innerHTML = "";
+      kindLabel.textContent = "no selection";
+      detail.innerHTML =
+        '<div class="empty-state">' + ICONS.money +
+        '<strong>No transaction selected</strong>' +
+        '<span>Seed a demo order or ask the copilot to investigate a PayPal ID. The lifecycle appears here with live status.</span></div>';
+      centerActions.innerHTML =
+        '<button class="btn btn-sm" id="emptySeedBtn" type="button">' + ICONS.bolt + ' Seed demo order</button>';
+      const seedBtn = $("#emptySeedBtn");
+      if (seedBtn) seedBtn.addEventListener("click", openDemoModal);
+      return;
+    }
+
+    const kind = txn.kind;
+    const status = (txn.status || "").toUpperCase();
+    const labels = kind === "invoice"
+      ? ["Drafted", "Sent", "Paid", "Closed"]
+      : kind === "refund"
+        ? ["Captured", "Refund pending", "Refunded", "Settled"]
+        : ["Order created", "Approved", "Captured", "Refunded"];
+    const index = stageIndex(kind, status);
+    const failed = ["FAILED", "DECLINED", "DENIED"].includes(status);
+    const tone = statusTone(status);
+
+    kindLabel.textContent = kind + (txn.paypal_id ? " · " + shortId(txn.paypal_id) : "");
+    stepper.innerHTML = labels.map(function (label, i) {
+      const state = failed && i === index ? "failed" : i < index ? "done" : i === index ? "current" : "";
+      const glyph = i < index ? ICONS.check : (i === index && failed ? ICONS.alert : String(i + 1));
+      return '<div class="stage ' + state + '"><div class="stage-node">' + glyph + '</div><div class="stage-label">' + esc(label) + '</div></div>';
+    }).join("");
+
+    selectedRow.innerHTML = (txn.paypal_id
+      ? '<span class="copy-row" style="flex:1"><span class="k">ID</span><code>' + esc(txn.paypal_id) + '</code><button class="copy-btn" id="copySelectedId" type="button" title="Copy ID">' + ICONS.copy + '</button></span>'
+      : '<span class="copy-row" style="flex:1"><span class="k">ID</span><code>—</code></span>');
+    const copySelected = $("#copySelectedId");
+    if (copySelected) copySelected.addEventListener("click", function () { copyText(txn.paypal_id); });
+
+    detail.innerHTML =
+      '<div class="detail-top">' +
+        '<div class="detail-amount"><div class="label">' + esc(kind) + ' amount</div>' +
+          '<div class="value">' + esc(txn.amount || "—") + '<small>' + esc(txn.currency || "") + '</small></div>' +
+        '</div>' +
+        '<div class="spacer"></div>' +
+        '<span class="status-pill-lg tone-' + tone + '"><span class="dot"></span>' + esc(status || "UNKNOWN") + '</span>' +
+      '</div>' +
+      '<div class="meta-grid">' +
+        '<div class="meta-item"><div class="k">Kind</div><div class="v">' + esc(kind) + '</div></div>' +
+        '<div class="meta-item"><div class="k">Created</div><div class="v">' + esc(fmtTime(txn.created_at)) + '</div></div>' +
+        '<div class="meta-item full"><div class="k">Parent</div><div class="v">' + esc(txn.parent_id || "—") + '</div></div>' +
+        '<div class="meta-item full"><div class="k">Description</div><div class="v" style="white-space:normal">' + esc(txn.description || "—") + '</div></div>' +
+      '</div>';
+
+    centerActions.innerHTML = "";
+    if (lastOrderId) {
+      const investigate = document.createElement("button");
+      investigate.className = "btn btn-sm";
+      investigate.innerHTML = ICONS.send + " Investigate with copilot";
+      investigate.addEventListener("click", function () {
+        send("Investigate order " + lastOrderId + " using live PayPal data. Cite the exact status and amounts.");
+      });
+      centerActions.appendChild(investigate);
+    }
+    const refresh = document.createElement("button");
+    refresh.className = "btn btn-sm";
+    refresh.innerHTML = ICONS.refresh + " Refresh state";
+    refresh.addEventListener("click", refreshAll);
+    centerActions.appendChild(refresh);
+  }
+
+  function computeBlocked() {
+    return audits.filter(function (entry) {
+      if (entry.error) return true;
+      return entry.result && String(entry.result.status || "").toLowerCase() === "rejected";
+    }).length;
+  }
+
+  function renderSafety() {
+    const executed = actions.filter(function (item) { return item.status === "approved"; }).length;
+    const unknown = actions.filter(function (item) { return item.status === "unknown"; }).length;
+    $("#statExecuted").textContent = String(executed);
+    $("#statBlocked").textContent = String(computeBlocked());
+    $("#statUnknown").textContent = String(unknown);
+  }
+
+  function approvalCopy(action) {
+    const args = action.args || {};
+    if (action.tool === "create_order") {
+      return {
+        title: "Create a " + money(args.amount, args.currency) + " order",
+        before: "No order exists",
+        after: (args.description || "New order") + " · " + money(args.amount, args.currency)
+      };
+    }
+    if (action.tool === "capture_order") {
+      return {
+        title: "Capture order " + shortId(args.order_id),
+        before: "Order " + shortId(args.order_id) + " · APPROVED",
+        after: args.mock_application_code
+          ? "Sandbox decline · " + args.mock_application_code
+          : "Funds captured to merchant"
+      };
+    }
+    if (action.tool === "refund_capture") {
+      return {
+        title: args.amount
+          ? "Refund " + money(args.amount) + " from " + shortId(args.capture_id)
+          : "Refund the remaining balance of " + shortId(args.capture_id),
+        before: "Capture " + shortId(args.capture_id),
+        after: args.amount ? "Refund " + money(args.amount) : "Full remaining balance · PayPal calculates"
+      };
+    }
+    if (action.tool === "create_invoice") {
+      let total = 0;
+      (args.items || []).forEach(function (item) {
+        total += Number(item.unit_amount || 0) * Number(item.quantity || 0);
+      });
+      return {
+        title: "Send a " + money(total, args.currency) + " invoice",
+        before: "Draft invoice",
+        after: "Send to " + (args.recipient_email || "recipient")
+      };
+    }
+    return { title: action.tool, before: "—", after: "—" };
+  }
+
+  function renderQueue() {
+    const list = $("#pendingList");
+    const queue = actions
+      .filter(function (item) { return item.status === "pending" || item.status === "unknown"; })
+      .sort(function (a, b) {
+        if (a.status !== b.status) return a.status === "pending" ? -1 : 1;
+        return String(b.created_at).localeCompare(String(a.created_at));
+      });
+    $("#queueCount").textContent = String(queue.length);
+
+    if (loading.actions && !actions.length) {
+      list.innerHTML = '<div class="skeleton"><div class="sk-line sk-card"></div><div class="sk-line sk-card"></div></div>';
+      return;
+    }
+    if (!queue.length) {
+      list.innerHTML =
+        '<div class="empty-state">' + ICONS.shield +
+        '<strong>Queue clear</strong><span>No write is waiting. The copilot can propose orders, captures, refunds and invoices, but nothing moves without your approval.</span></div>';
+      return;
+    }
+
+    list.innerHTML = "";
+    queue.forEach(function (action) {
+      list.appendChild(renderApprovalCard(action));
+    });
+  }
+
+  function renderApprovalCard(action) {
+    const meta = TOOL_META[action.tool] || { label: "Write action", cls: "tool-blue", icon: ICONS.bolt, risk: "Write action" };
+    const copy = approvalCopy(action);
+    const isUnknown = action.status === "unknown";
+    const card = document.createElement("article");
+    card.className = "approval-card " + (isUnknown ? "unknown" : "pending");
+    card.dataset.actionId = action.id;
+
+    card.innerHTML =
+      '<div class="approval-top">' +
+        '<span class="tool-chip ' + meta.cls + '">' + meta.icon + esc(meta.label) + '</span>' +
+        '<span class="mini-pill ' + (isUnknown ? "tone-warn" : "tone-warn") + '"><span class="dot"></span>' + (isUnknown ? "Outcome unknown" : "Awaiting approval") + '</span>' +
+        '<div class="spacer"></div>' +
+        '<span class="mini-pill tone-neutral">' + esc(meta.risk) + '</span>' +
+      '</div>' +
+      '<h3 class="approval-title">' + esc(copy.title) + '</h3>' +
+      '<div class="preview">' +
+        '<div class="preview-side before"><div class="k">Before</div><div class="v">' + esc(copy.before) + '</div></div>' +
+        '<div class="preview-arrow">' + ICONS.arrow + '</div>' +
+        '<div class="preview-side after"><div class="k">After approval</div><div class="v">' + esc(copy.after) + '</div></div>' +
+      '</div>' +
+      '<div class="approval-actions"></div>' +
+      '<div class="result-box"></div>' +
+      '<div class="safety-note">' + ICONS.shield + '<span>Server claims this action atomically. Double-clicking is safe; it executes once.</span></div>';
+
+    const actionRow = $(".approval-actions", card);
+    const resultBox = $(".result-box", card);
+
+    if (isUnknown) {
+      const reconcile = document.createElement("button");
+      reconcile.className = "btn btn-sm btn-primary";
+      reconcile.innerHTML = ICONS.refresh + " Reconcile with PayPal";
+      reconcile.addEventListener("click", function () { reconcileAction(action, card, reconcile); });
+      const explain = document.createElement("button");
+      explain.className = "btn btn-sm btn-icon-only";
+      explain.title = "Ask the copilot to explain";
+      explain.innerHTML = ICONS.send;
+      explain.addEventListener("click", function () {
+        send("Action " + action.id + " has an unknown outcome after a PayPal error. Use live PayPal data to explain what happened and whether it must be reconciled. Do not retry the write.");
+      });
+      actionRow.appendChild(reconcile);
+      actionRow.appendChild(explain);
+      resultBox.textContent = "No automatic retry. Reconcile reads the live order or capture and only resolves on definitive evidence.";
+      resultBox.className = "result-box show warn";
+    } else {
+      const approve = document.createElement("button");
+      approve.className = "btn btn-sm btn-ok";
+      approve.innerHTML = ICONS.check + " Approve & execute";
+      approve.addEventListener("click", function () { approveAction(action, card, approve); });
+
+      const reject = document.createElement("button");
+      reject.className = "btn btn-sm btn-danger";
+      reject.textContent = "Reject";
+      reject.addEventListener("click", function () {
+        if (reject.dataset.confirm !== "1") {
+          reject.dataset.confirm = "1";
+          reject.textContent = "Confirm reject";
+          setTimeout(function () {
+            if (document.body.contains(reject)) {
+              reject.dataset.confirm = "0";
+              reject.textContent = "Reject";
+            }
+          }, 3200);
+          return;
+        }
+        rejectAction(action, card, reject);
+      });
+
+      actionRow.appendChild(approve);
+      actionRow.appendChild(reject);
+    }
+
+    $$("[data-copy]", card).forEach(function (button) {
+      button.addEventListener("click", function () { copyText(button.dataset.copy); });
+    });
+
+    return card;
+  }
+
+  function showCardResult(card, message, kind) {
+    const box = $(".result-box", card);
+    if (!box) return;
+    box.textContent = message;
+    box.className = "result-box show " + (kind || "");
+  }
+
+  async function approveAction(action, card, button) {
+    button.disabled = true;
+    const row = $(".approval-actions", card);
+    $$("button", row).forEach(function (item) { item.disabled = true; });
+    const original = button.innerHTML;
+    button.innerHTML = '<span class="spinner"></span> Executing once…';
+    showCardResult(card, "Claiming the action and calling PayPal. This may take a moment.", "warn");
+    try {
+      const data = await api("/api/actions/" + encodeURIComponent(action.id) + "/approve", { method: "POST" });
+      button.innerHTML = ICONS.check + " Executed once";
+      const result = data.result || {};
+      const resultMsg = result.status ? "Status: " + String(result.status).toUpperCase() : "Executed successfully.";
+      showCardResult(card, "Executed and recorded in the audit log. " + resultMsg, "ok");
+      toast("Action approved and executed exactly once.", "ok");
+      await refreshAll();
+    } catch (e) {
+      button.innerHTML = original;
+      button.disabled = false;
+      const error = (e.payload && e.payload.error) || {};
+      const ambiguous = error.ambiguous === true || error.outcome === "unknown";
+      if (ambiguous) {
+        showCardResult(card, "Execution outcome could not be confirmed. The write is NOT retried automatically. Use Reconcile to read the current PayPal state.", "warn");
+        toast("Outcome unknown. Reconcile from live PayPal state.", "warn");
+      } else {
+        showCardResult(card, "Execution failed: " + (error.message || e.message || "An error occurred."), "error");
+        toast(error.message || e.message || "An error occurred.", "error");
+      }
+      await refreshAll();
+    }
+  }
+
+  async function rejectAction(action, card, button) {
+    button.disabled = true;
+    const row = $(".approval-actions", card);
+    $$("button", row).forEach(function (item) { item.disabled = true; });
+    button.textContent = "Rejecting…";
+    try {
+      await api("/api/actions/" + encodeURIComponent(action.id) + "/reject", { method: "POST" });
+      toast("Action rejected. PayPal was not called.", "ok");
+      await refreshAll();
+    } catch (e) {
+      showCardResult(card, "Reject failed: " + e.message, "error");
+      toast(e.message, "error");
+      button.disabled = false;
+      button.textContent = "Reject";
+    }
+  }
+
+  async function reconcileAction(action, card, button) {
+    button.disabled = true;
+    const original = button.innerHTML;
+    button.innerHTML = '<span class="spinner"></span> Reading live PayPal state…';
+    try {
+      const data = await api("/api/actions/" + encodeURIComponent(action.id) + "/reconcile", { method: "POST" });
+      const evidence = data.evidence || {};
+      const evMsg = [];
+      if (evidence.order_status) evMsg.push("Order status: " + evidence.order_status);
+      if (evidence.capture_status) evMsg.push("Capture status: " + evidence.capture_status);
+      showCardResult(card, (data.message || "Reconciled.") + (evMsg.length ? "\n" + evMsg.join(", ") : ""), data.resolved ? "ok" : "warn");
+      toast(data.resolved ? "Reconciled from live PayPal state." : "Still unresolved. PayPal does not provide definitive evidence.", data.resolved ? "ok" : "warn");
+      await refreshAll();
+    } catch (e) {
+      button.innerHTML = original;
+      button.disabled = false;
+      const error = (e.payload && e.payload.error) || {};
+      showCardResult(card, "Reconcile failed: " + (error.message || e.message || "An error occurred."), "error");
+      toast(error.message || e.message || "An error occurred.", "error");
+    }
+  }
+
+  function renderActivity() {
+    const list = $("#activityList");
+    if (loading.audit && !audits.length) {
+      list.innerHTML = '<div class="skeleton"><div class="sk-line w70"></div><div class="sk-line"></div><div class="sk-line w50"></div></div>';
+      return;
+    }
+    if (!audits.length) {
+      list.innerHTML = '<div class="empty-state"><strong>No activity yet</strong><span>Reads, proposals, approvals and failures are all written here with UTC timestamps.</span></div>';
+      return;
+    }
+    const recent = audits.slice(0, 10);
+    list.innerHTML = "";
+    recent.forEach(function (entry) {
+      const item = document.createElement("div");
+      const failed = !!entry.error;
+      const rejected = entry.result && String(entry.result.status || "").toLowerCase() === "rejected";
+      item.className = "activity-item " + (failed ? "error" : rejected ? "warn" : "ok");
+      const message = failed
+        ? (entry.error.message || "An error occurred.")
+        : (entry.result && (entry.result.status || entry.result.message)) || "recorded";
+      const actorLabel = (entry.actor || "system").replace("-", " ");
+      item.innerHTML =
+        '<div class="activity-dot"></div>' +
+        '<div class="activity-body">' +
+          '<div class="activity-line">' +
+            '<span class="activity-tool">' + esc(actorLabel) + '</span>' +
+            '<span class="activity-time">' + esc(fmtTime(entry.timestamp)) + '</span>' +
+          '</div>' +
+          '<div class="activity-msg">' + esc(String(message)) + '</div>' +
+        '</div>';
+      list.appendChild(item);
+    });
+  }
+
+  function statusCellRenderer(params) {
+    const span = document.createElement("span");
+    const tone = statusTone(params.value);
+    span.className = "mini-pill tone-" + tone;
+    span.innerHTML = '<span class="dot"></span>' + esc(String(params.value || "—").toUpperCase());
+    return span;
+  }
+
+  function initGrids() {
+    const txnEl = document.getElementById("txnGrid");
+    const auditEl = document.getElementById("auditGrid");
+    if (!window.agGrid) {
+      txnEl.innerHTML = '<div class="empty-state"><strong>AG Grid unavailable</strong><span>Check the CDN connection. The rest of the console keeps working.</span></div>';
+      auditEl.innerHTML = '<div class="empty-state"><strong>AG Grid unavailable</strong><span>Check the CDN connection. The rest of the console keeps working.</span></div>';
+      return;
+    }
+    const common = {
+      defaultColDef: { sortable: true, filter: true, resizable: true, minWidth: 82 },
+      rowSelection: "single",
+      animateRows: true,
+      pagination: true,
+      paginationPageSize: 10,
+      suppressCellFocus: true,
+      headerHeight: 32,
+      rowHeight: 32
+    };
+    txnGrid = agGrid.createGrid(txnEl, Object.assign({
+      columnDefs: [
+        { field: "created_at", headerName: "Created", minWidth: 150, valueFormatter: function (p) { return fmtTime(p.value); } },
+        { field: "kind", headerName: "Kind", width: 92 },
+        { field: "paypal_id", headerName: "PayPal ID", minWidth: 150, flex: 1 },
+        { field: "status", headerName: "Status", width: 132, cellRenderer: statusCellRenderer },
+        { field: "amount", headerName: "Amount", width: 88, valueFormatter: function (p) { return p.value ? p.value : "—"; } },
+        { field: "currency", headerName: "Cur", width: 64 },
+        { field: "description", headerName: "Description", minWidth: 160, flex: 1.2 }
+      ],
+      rowData: [],
+      onRowClicked: function (event) { selectTransaction(event.data); }
+    }, common));
+    auditGrid = agGrid.createGrid(auditEl, Object.assign({
+      columnDefs: [
+        { field: "timestamp", headerName: "Time", minWidth: 150, valueFormatter: function (p) { return fmtTime(p.value); } },
+        { field: "actor", headerName: "Actor", width: 112 },
+        { field: "tool", headerName: "Action", width: 138, valueFormatter: function (p) { return esc(actionLabel(p.value)); } },
+        { field: "status", headerName: "Status", width: 120, cellRenderer: statusCellRenderer },
+        { field: "message", headerName: "Outcome", minWidth: 180, flex: 1.2, valueFormatter: function (p) { return esc(p.value || ""); } }
+      ],
+      rowData: []
+    }, common));
+  }
+
+  async function loadActions() {
+    try {
+      const data = await api("/api/actions");
+      actions = data.actions || [];
+      loading.actions = false;
+      renderQueue();
+      renderSafety();
+      const pending = actions.filter(function (item) { return item.status === "pending"; });
+      if (pending.length) toast(pending.length + " action(s) still await your approval.", "warn");
+    } catch (e) {
+      loading.actions = false;
+      $("#pendingList").innerHTML = '<div class="empty-state"><strong>Could not load approvals</strong><span>' + esc(e.message) + '</span></div>';
+      toast("Approvals: " + e.message, "error");
+    }
+  }
+
+  async function loadTransactions() {
+    try {
+      const data = await api("/api/transactions");
+      transactions = data.transactions || [];
+      loading.transactions = false;
+      if (txnGrid) txnGrid.setGridOption("rowData", transactions);
+      renderLifecycle();
+    } catch (e) {
+      loading.transactions = false;
+      toast("Transactions: " + e.message, "error");
+    }
+  }
+
+  async function loadAudit() {
+    try {
+      const data = await api("/api/audit");
+      audits = data.audit || [];
+      loading.audit = false;
+      if (auditGrid) auditGrid.setGridOption("rowData", audits);
+      renderActivity();
+      renderSafety();
+    } catch (e) {
+      loading.audit = false;
+      toast("Audit log: " + e.message, "error");
+    }
+  }
+
+  async function refreshAll() {
+    await Promise.allSettled([loadHealth(), loadActions(), loadTransactions(), loadAudit()]);
+  }
+
+  function openDemoModal() {
+    const modal = $("#demoModal");
+    modal.classList.add("show");
+    renderDemoModal();
+  }
+
+  function closeDemoModal() {
+    $("#demoModal").classList.remove("show");
+  }
+
+  function renderDemoModal() {
+    const body = $("#demoBody");
+    if (!demoSeed) {
+      body.innerHTML =
+        '<div class="demo-hero"><h4>Reliable 2m45s walkthrough</h4><p>Seed a sandbox order, approve the buyer payment in PayPal, then let PayPilot investigate it. The declined-capture path is deterministic and never touches real money.</p></div>' +
+        '<div class="demo-row"><button id="seedOrderBtn" class="btn btn-primary" type="button">' + ICONS.bolt + ' Seed sandbox order</button>' +
+        '<button id="demoExplainBtn" class="btn" type="button">' + ICONS.shield + ' Explain safety</button></div>' +
+        '<div class="demo-note">Requires PayPal sandbox credentials in <code>.env</code>. If keys are missing, the seed call returns a clean configuration error.</div>';
+      $("#seedOrderBtn").addEventListener("click", seedDemoOrder);
+      $("#demoExplainBtn").addEventListener("click", function () {
+        closeDemoModal();
+        send("Explain the safety model: how proposals, approvals, idempotency and reconciliation work.");
+      });
+      return;
+    }
+
+    const url = demoSeed.approval_url && /^https:\/\//.test(demoSeed.approval_url) ? demoSeed.approval_url : "";
+    const orderId = demoSeed.order && demoSeed.order.id ? demoSeed.order.id : "";
+    body.innerHTML =
+      '<div class="demo-hero"><h4>Sandbox order created</h4><p>' + esc(demoSeed.instructions || "Open the approval link, approve with a sandbox buyer, then return here.") + '</p></div>' +
+      '<div class="demo-meta">' +
+        '<div class="copy-row"><span class="k">ORDER</span><code>' + esc(orderId || "—") + '</code><button class="copy-btn" id="copyDemoOrder" type="button" title="Copy order id">' + ICONS.copy + '</button></div>' +
+      '</div>' +
+      (url ? '<a class="demo-link" href="' + esc(url) + '" target="_blank" rel="noopener">' + ICONS.external + ' Open PayPal approval page</a>' : '<div class="demo-note">No approval link was returned. Check the PayPal order in the sandbox dashboard.</div>') +
+      '<div class="demo-row">' +
+        '<button id="declineBtn" class="btn btn-danger" type="button">' + ICONS.alert + ' Simulate declined capture</button>' +
+        '<button id="investigateBtn" class="btn" type="button">' + ICONS.send + ' Investigate with copilot</button>' +
+      '</div>' +
+      '<div class="demo-note">The decline is queued as a normal pending action with the sandbox <code>PayPal-Mock-Response</code> header. Approve it to see PayPal reject the write; nothing is retried.</div>' +
+      '<div class="demo-row"><button id="seedAgainBtn" class="btn btn-sm" type="button">' + ICONS.refresh + ' Seed another order</button></div>';
+    const copy = $("#copyDemoOrder");
+    if (copy) copy.addEventListener("click", function () { copyText(orderId); });
+    $("#seedAgainBtn").addEventListener("click", seedDemoOrder);
+    $("#declineBtn").addEventListener("click", proposeDecline);
+    $("#investigateBtn").addEventListener("click", function () {
+      closeDemoModal();
+      if (orderId) send("Investigate order " + orderId + " using live PayPal data. Explain the exact status and numbers.");
+    });
+  }
+
+  async function seedDemoOrder() {
+    const button = $("#seedOrderBtn") || $("#seedAgainBtn");
+    if (button) { button.disabled = true; button.textContent = "Creating…"; }
+    try {
+      const data = await api("/api/demo/seed", { method: "POST", body: "{}" });
+      demoSeed = data;
+      lastOrderId = data.order ? data.order.id : null;
+      if (lastOrderId) {
+        try { localStorage.setItem("paypilot.lastOrderId", lastOrderId); } catch (e) {}
+      }
+      toast("Sandbox order created. Approve it with a sandbox buyer account.", "ok");
+      renderDemoModal();
+      await refreshAll();
+      if (lastOrderId) {
+        const row = transactions.find(function (item) { return item.paypal_id === lastOrderId; });
+        if (row) selectTransaction(row);
+      }
+    } catch (e) {
+      const error = (e.payload && e.payload.error) || {};
+      toast(error.message || e.message || "An error occurred.", "error");
+      if (button) { button.disabled = false; button.innerHTML = ICONS.bolt + " Seed sandbox order"; }
+      const body = $("#demoBody");
+      if (body) {
+        const errorDiv = document.createElement("div");
+        errorDiv.className = "result-box show error";
+        errorDiv.textContent = error.message || e.message || "An error occurred.";
+        body.appendChild(errorDiv);
+      }
+    }
+  }
+
+  async function proposeDecline() {
+    if (!lastOrderId) { toast("Seed a sandbox order first.", "warn"); return; }
+    const button = $("#declineBtn");
+    if (button) { button.disabled = true; button.textContent = "Queueing…"; }
+    try {
+      const data = await api("/api/demo/decline", {
+        method: "POST",
+        body: JSON.stringify({ order_id: lastOrderId })
+      });
+      toast("Declined capture queued. Approve it to see the failure path.", "warn");
+      closeDemoModal();
+      await refreshAll();
+      const card = document.querySelector('[data-action-id="' + data.action.id + '"]');
+      if (card) {
+        card.scrollIntoView({ behavior: "smooth", block: "center" });
+        card.classList.add("flash");
+      }
+    } catch (e) {
+      toast(e.message, "error");
+      if (button) { button.disabled = false; button.innerHTML = ICONS.alert + " Simulate declined capture"; }
+    }
+  }
+
+  function bindEvents() {
+    const input = $("#chatInput");
+    const sendBtn = $("#sendBtn");
+    sendBtn.addEventListener("click", function () { send(); });
+    input.addEventListener("keydown", function (event) {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        send();
+      }
+    });
+    input.addEventListener("input", function () {
+      input.style.height = "auto";
+      input.style.height = Math.min(input.scrollHeight, 132) + "px";
+    });
+
+    $$(".chip").forEach(function (chip) {
+      chip.addEventListener("click", function () {
+        const prompt = chip.dataset.prompt || "";
+        if (prompt.indexOf("most recent order") !== -1) {
+          const orderId = lastOrderId || (transactions.find(function (item) { return item.kind === "order"; }) || {}).paypal_id;
+          if (orderId) {
+            send("Investigate order " + orderId + " using live PayPal data. Cite the exact status and amounts.");
+            return;
+          }
+        }
+        send(prompt);
+      });
+    });
+
+    $("#refreshBtn").addEventListener("click", function () {
+      toast("Refreshing live state…");
+      refreshAll();
+    });
+    $("#demoBtn").addEventListener("click", openDemoModal);
+    $("#closeDemoModal").addEventListener("click", closeDemoModal);
+    $("#demoModal").addEventListener("click", function (event) {
+      if (event.target === $("#demoModal")) closeDemoModal();
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") closeDemoModal();
+    });
+  }
+
+  function boot() {
+    bindEvents();
+    initGrids();
+    addMessage(
+      "assistant",
+      "I am your payment operations copilot. I read live PayPal sandbox data, explain what actually happened, and propose writes. Every write waits for your explicit approval — I never execute one on my own. Ask me to investigate an order or capture, or use Demo mode for a guided run."
+    );
+    loadHealth();
+    loadActions();
+    loadTransactions();
+    loadAudit();
+    renderLifecycle();
+    renderQueue();
+    renderActivity();
+    renderSafety();
+    if (window.location.hash === "#demo") openDemoModal();
+  }
+
+  boot();
+})();
+</script>
+</body>
+</html>

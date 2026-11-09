@@ -1332,6 +1332,28 @@
     banner.classList.add("show");
   }
 
+  function renderMarkdown(text) {
+    // Clean up escaped bold markers: \*\* → **
+    text = String(text).replace(/\\\*\*/g, "**");
+    const container = document.createElement("div");
+    const pattern = /\*\*([^*\n]+)\*\*/g;
+    let lastIndex = 0;
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        container.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+      }
+      const strong = document.createElement("strong");
+      strong.textContent = match[1];
+      container.appendChild(strong);
+      lastIndex = pattern.lastIndex;
+    }
+    if (lastIndex < text.length) {
+      container.appendChild(document.createTextNode(text.slice(lastIndex)));
+    }
+    return container;
+  }
+
   function addMessage(role, text, steps, isError) {
     const wrap = document.createElement("div");
     wrap.className = "msg " + (role === "user" ? "user" : "assistant") + (isError ? " error" : "");
@@ -1342,8 +1364,7 @@
     bubble.className = "bubble";
     if (steps && steps.length) bubble.appendChild(renderTrace(steps));
     if (text) {
-      const node = document.createElement("div");
-      node.textContent = text;
+      const node = renderMarkdown(text);
       bubble.appendChild(node);
     }
     wrap.appendChild(avatar);
@@ -1427,7 +1448,7 @@
     const input = $("#chatInput");
     const text = String(message || input.value || "").trim();
     if (!text || sending) return;
-    if (!health || !health.llm_configured) {
+    if (health !== null && !health.llm_configured) {
       addMessage("assistant",
         "LLM is not configured. Add LLM_API_KEY and LLM_MODEL to your .env file, " +
         "then restart the server. The agent can still read local data and propose " +

@@ -469,3 +469,111 @@ async def test_invoice_flow_records_sent_invoice(env):
     assert txns[0]["kind"] == "invoice"
     assert txns[0]["status"] == "SENT"
     assert txns[0]["amount"] == "150.00"
+
+
+# --------------------------------------------------------------------------- #
+# list_pending_actions tool regression tests
+# --------------------------------------------------------------------------- #
+
+async def test_list_pending_actions_retrieves_pending_actions(env):
+    """The agent can list pending approval actions via list_pending_actions."""
+    db.create_pending_action(
+        "create_order",
+        {"amount": "25.00", "currency": "USD", "description": "Consulting"},
+    )
+    db.create_pending_action(
+        "refund_capture",
+        {"capture_id": "CAP-123", "amount": "10.00", "note": "Partial refund"},
+    )
+    async with respx.mock(assert_all_called=False) as mock:
+        llm = mock.post(LLM_URL).mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json=llm_tool_call("list_pending_actions", {}),
+                ),
+                httpx.Response(200, json=llm_text("Here are your pending actions.")),
+            ]
+        )
+        token = mock_token(mock)
+        client = PayPalClient()
+        try:
+            result = await run_agent("What actions are pending?", client=client)
+        finally:
+            await client.aclose()
+
+    assert llm.call_count == 2
+    assert token.call_count == 0
+    # No PayPal writes happen for a read-only list operation.
+    read_steps = [s for s in result["steps"] if s.get("type") == "read"]
+    assert len(read_steps) == 1
+    assert read_steps[0]["tool"] == "list_pending_actions"
+    pending = read_steps[0]["result"].get("actions", [])
+    assert len(pending) == 2
+    tools = {a["tool"] for a in pending}
+    assert tools == {"create_order", "refund_capture"}
+    for a in pending:
+        assert a["status"] == "pending"
+        assert "args" in a
+
+
+async def test_list_pending_actions_empty_queue(env):
+    """An empty pending queue is reported accurately."""
+    async with respx.mock(assert_all_called=False) as mock:
+        llm = mock.post(LLM_URL).mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json=llm_tool_call("list_pending_actions", {}),
+                ),
+                httpx.Response(200, json=llm_text("No pending actions.")),
+            ]
+        )
+        token = mock_token(mock)
+        client = PayPalClient()
+        try:
+            result = await run_agent("Any pending approvals?", client=client)
+        finally:
+            await client.aclose()
+
+    assert llm.call_count == 2
+    assert token.call_count == 0
+    read_steps = [s for s in result["steps"] if s.get("type") == "read"]
+    assert len(read_steps) == 1
+    assert read_steps[0]["tool"] == "list_pending_actions"
+    assert read_steps[0]["result"].get("actions", []) == []
+
+
+async def test_list_pending_actions_does_not_call_list_local_transactions(env):
+    """Asking about pending actions uses list_pending_actions, not list_local_transactions."""
+    db.create_pending_action(
+        "create_order",
+        {"amount": "25.00", "currency": "USD", "description": "Consulting"},
+    )
+    async with respx.mock(assert_all_called=False) as mock:
+        llm = mock.post(LLM_URL).mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json=llm_tool_call("list_pending_actions", {}),
+                ),
+                httpx.Response(200, json=llm_text("One action is pending.")),
+            ]
+        )
+        token = mock_token(mock)
+        client = PayPalClient()
+        try:
+            result = await run_agent("Show me pending actions", client=client)
+        finally:
+            await client.aclose()
+
+    assert llm.call_count == 2
+    assert token.call_count == 0
+    # The tool result must contain pending actions, not local transactions.
+    steps = result["steps"]
+    read_steps = [s for s in steps if s.get("type") == "read"]
+    assert len(read_steps) == 1
+    assert read_steps[0]["tool"] == "list_pending_actions"
+    assert len(read_steps[0]["result"].get("actions", [])) == 1
+    # No executed transactions were created.
+    assert db.list_transactions() == []

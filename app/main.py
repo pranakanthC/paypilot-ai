@@ -34,6 +34,7 @@ STATIC_DIR = BASE_DIR / "static"
 async def lifespan(app: FastAPI):
     db.init_db()
     app.state.paypal = PayPalClient()
+    app.state.paypal_connected = False
     try:
         yield
     finally:
@@ -174,6 +175,7 @@ async def health() -> dict:
                 await client.aclose()
         except Exception:
             paypal_connected = False
+    app.state.paypal_connected = paypal_connected
 
     # Verify actual LLM connectivity (only when credentials are present).
     # Any HTTP response means the endpoint is reachable.
@@ -220,6 +222,8 @@ async def chat(payload: ChatRequest, request: Request) -> dict:
         history=payload.history,
         client=request.app.state.paypal,
         settings=settings,
+        paypal_configured=settings.paypal_configured,
+        paypal_connected=getattr(request.app.state, "paypal_connected", False),
     )
     return result
 

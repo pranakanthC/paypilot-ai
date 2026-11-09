@@ -22,9 +22,7 @@ from .tools import (
 MAX_ITERATIONS = 6
 MAX_TOOL_CONTENT_CHARS = 20000
 
-SYSTEM_PROMPT = """You are PayPilot, an intelligent payment operations specialist.
-
-Your role is to help merchants understand, investigate, and manage their payment operations through natural conversation.
+SYSTEM_PROMPT_BASE = r"""You are PayPilot, an intelligent payment operations specialist.
 
 Communicate like an experienced payments specialist: professional, trustworthy, calm, approachable, and solution-oriented. Handle technical complexity in the background and present users with clear, understandable information.
 
@@ -33,7 +31,7 @@ Core principle: Always communicate the business outcome, not the underlying tech
 Universal rules:
 1. Use clear, natural, professional English. Keep responses concise but sufficiently informative.
 2. Explain the result before providing any context. Use short paragraphs and meaningful headings when necessary.
-3. Never use asterisks, Markdown bold, or Markdown italic formatting.
+3. Use Markdown bold syntax (`**text**`) for emphasis. Never use escaped asterisks (`\*\*text\*\*`) or raw unrendered Markdown syntax.
 4. Never expose internal tool names, function names, raw JSON, API payloads, stack traces, or internal implementation details.
 5. Never invent transaction details, payment statuses, amounts, IDs, or operation results.
 6. Clearly distinguish verified facts from assumptions. Ask only for information that is genuinely required.
@@ -58,7 +56,7 @@ Financial safety:
 - If an operation has an uncertain outcome, explain that its final status could not be confirmed.
 - Never blindly retry an operation when doing so could cause duplicate financial activity.
 
-READ tools (get_order, get_capture, list_local_transactions) run automatically.
+READ tools (get_order, get_capture, list_local_transactions, list_pending_actions) run automatically.
 WRITE tools (create_order, capture_order, refund_capture, create_invoice) are proposals. They are NEVER executed by you. When you call one, the system creates a pending approval request and notifies the user in the UI. Never claim a write happened; say that you have prepared it and it awaits explicit approval.
 
 Use tools to look up IDs before explaining anything about them. If the user gives no ID and no local transaction matches, ask for the PayPal ID.
@@ -66,6 +64,48 @@ Amounts must be positive, currencies must be ISO 4217 codes, and refunds must no
 Only use the PayPal sandbox. Never suggest live-money operations.
 
 When a write action is proposed, summarize exactly what will happen, the amount, the currency, and that the user must approve or reject it."""
+
+
+def _build_system_prompt(
+    paypal_configured: bool, paypal_connected: bool
+) -> str:
+    """Build the system prompt with PayPal execution availability context.
+
+    The agent must never claim a write action can execute when PayPal is
+    unconfigured or disconnected. This context is authoritative and comes
+    from the server, never inferred from pending action existence.
+    """
+    if paypal_configured and paypal_connected:
+        paypal_status = (
+            "PAYPAL EXECUTION AVAILABLE: PayPal sandbox credentials are "
+            "configured and the sandbox is reachable. Approved write actions "
+            "can be executed against the real PayPal sandbox API."
+        )
+    elif paypal_configured and not paypal_connected:
+        paypal_status = (
+            "PAYPAL EXECUTION UNAVAILABLE: PayPal sandbox credentials are "
+            "configured but the sandbox is currently unreachable. No write "
+            "action can be executed against PayPal until connectivity is "
+            "restored. Never claim an action will succeed."
+        )
+    else:
+        paypal_status = (
+            "PAYPAL EXECUTION UNAVAILABLE: PayPal sandbox credentials are "
+            "not configured. No write action can be executed against PayPal. "
+            "Valid Sandbox client ID and secret are required before any order "
+            "creation, capture, refund, or invoice can be executed. Never "
+            "claim an action will succeed or that money has moved."
+        )
+
+    return f"""{SYSTEM_PROMPT_BASE}
+
+{paypal_status}
+
+If PayPal execution is unavailable, explain clearly that the action is only a
+proposal awaiting approval and cannot be executed until PayPal credentials are
+configured and the sandbox is reachable. Do not claim an order was created,
+a payment was captured, or a refund was issued merely because an action is
+pending or approved."""
 
 
 class LLMError(Exception):
@@ -180,6 +220,8 @@ async def run_agent(
     client: Optional[PayPalClient] = None,
     settings: Optional[Settings] = None,
     max_iterations: int = MAX_ITERATIONS,
+    paypal_configured: bool = False,
+    paypal_connected: bool = False,
 ) -> dict:
     """Run the agent loop. Returns reply text, visible steps and proposals."""
     settings = settings or get_settings()
@@ -188,7 +230,8 @@ async def run_agent(
     owns_client = client is None
     client = client or PayPalClient(settings)
 
-    messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    system_prompt = _build_system_prompt(paypal_configured, paypal_connected)
+    messages: list[dict] = [{"role": "system", "content": system_prompt}]
     messages.extend(_sanitize_history(history))
     messages.append({"role": "user", "content": user_message})
 
@@ -196,6 +239,8 @@ async def run_agent(
     pending_actions: list[dict] = []
     proposed: dict[tuple[str, str], str] = {}
     last_content: Optional[str] = None
+    pending_actions_read_result: Optional[list[dict]] = None
+    broke_early: bool = False
 
     try:
         for iteration in range(1, max_iterations + 1):
@@ -217,12 +262,9 @@ async def run_agent(
             messages.append(assistant_message)
 
             if not tool_calls:
-                return {
-                    "reply": last_content or "I could not produce a response.",
-                    "pending_actions": pending_actions,
-                    "steps": steps,
-                    "iterations": iteration,
-                }
+                reply = last_content or "I could not produce a response."
+                broke_early = True
+                break
 
             for tool_call in tool_calls:
                 call_id = tool_call.get("id") or "call_unknown"
@@ -320,6 +362,12 @@ async def run_agent(
                                 "result": result,
                             }
                         )
+                        # Capture list_pending_actions results for factual
+                        # post-processing. The LLM's free-text reply must never
+                        # invent pending actions that don't exist in the tool result.
+                        if tool_name == "list_pending_actions":
+                            pending_actions_read_result = result.get("actions", [])
+                        continue
                     except PayPalError as exc:
                         error = exc.to_dict()
                         db.log_audit(
@@ -334,6 +382,7 @@ async def run_agent(
                                 "error": error,
                             }
                         )
+                        continue
                     except Exception as exc:  # defensive: always answer the model
                         error = {"type": "tool_error", "message": str(exc)}
                         db.log_audit(
@@ -342,13 +391,18 @@ async def run_agent(
                         messages.append(_tool_message(call_id, {"error": error}))
                         steps.append(
                             {
-                                "type": "error",
+                                "type": "read",
                                 "tool": tool_name,
-                                "summary": f"{summarize_step(tool_name, validated_args)} failed",
-                                "error": error,
+                                "summary": summarize_step(tool_name, validated_args),
+                                "result": result,
                             }
                         )
-                    continue
+                        # Capture list_pending_actions results for factual
+                        # post-processing. The LLM's free-text reply must never
+                        # invent pending actions that don't exist in the tool result.
+                        if tool_name == "list_pending_actions":
+                            pending_actions_read_result = result.get("actions", [])
+                        continue
 
                 error = {"type": "unknown_tool", "message": f"Unknown tool: {tool_name}"}
                 messages.append(_tool_message(call_id, {"error": error}))
@@ -367,20 +421,87 @@ async def run_agent(
                 f"{reply}\n\nI prepared {len(pending_actions)} action(s) for your "
                 "approval. Nothing has been executed yet."
             )
-        else:
+        elif not broke_early:
             reply = (
                 f"{reply}\n\nI stopped after {max_iterations} reasoning steps. "
                 "Please refine the request or provide a PayPal ID."
+            )
+        # Server-side factual post-processing: if list_pending_actions was
+        # called, replace the LLM's free-text reply with a summary derived
+        # solely from the actual tool results. This prevents the LLM from
+        # hallucinating pending actions, amounts, descriptions, or statuses
+        # that do not exist in the database.
+        if pending_actions_read_result is not None:
+            reply = _build_pending_actions_summary(
+                pending_actions_read_result, paypal_configured, paypal_connected
             )
         return {
             "reply": reply,
             "pending_actions": pending_actions,
             "steps": steps,
-            "iterations": max_iterations,
+            "iterations": iteration,
         }
     finally:
         if owns_client:
             await client.aclose()
+
+
+def _build_pending_actions_summary(
+    actions: list[dict],
+    paypal_configured: bool,
+    paypal_connected: bool,
+) -> str:
+    """Build a factually accurate summary of pending actions from tool results.
+
+    Only includes actions actually returned by list_pending_actions. Never
+    invents action IDs, amounts, descriptions, statuses, or action types.
+    """
+    if not actions:
+        return (
+            "There are no pending approval actions waiting for your review. "
+            "No write has been proposed that requires your approval."
+        )
+
+    lines = [f"There are {len(actions)} action(s) awaiting your approval:"]
+    for action in actions:
+        args = action.get("args") or {}
+        amount = args.get("amount", "—")
+        currency = args.get("currency", "—")
+        description = args.get("description", "—")
+        tool = action.get("tool", "—")
+        status = action.get("status", "pending")
+
+        # Map internal tool name to business-friendly label.
+        tool_labels = {
+            "create_order": "Create order",
+            "capture_order": "Capture payment",
+            "refund_capture": "Refund capture",
+            "create_invoice": "Send invoice",
+        }
+        label = tool_labels.get(tool, tool.replace("_", " ").title())
+
+        lines.append(
+            f"• {label}: {amount} {currency} — {description} (status: {status})"
+        )
+
+    # PayPal connectivity warning
+    if not paypal_configured:
+        lines.append(
+            "\nPayPal sandbox credentials are not configured. None of these "
+            "actions can be executed until valid credentials are added."
+        )
+    elif not paypal_connected:
+        lines.append(
+            "\nPayPal sandbox is currently unreachable. None of these actions "
+            "can be executed until connectivity is restored."
+        )
+
+    lines.append(
+        "\nNone of these actions have been executed. They require your explicit "
+        "approval before any PayPal write occurs."
+    )
+
+    return "\n".join(lines)
 
 
 async def _execute_read(tool: str, args: dict, client: PayPalClient) -> dict:
@@ -394,4 +515,6 @@ async def _execute_read(tool: str, args: dict, client: PayPalClient) -> dict:
         return await client.get_capture(args["capture_id"])
     if tool == "list_local_transactions":
         return {"transactions": db.list_transactions(limit=50)}
+    if tool == "list_pending_actions":
+        return {"actions": db.list_pending_actions("pending")}
     raise ValueError(f"Unknown read tool: {tool}")

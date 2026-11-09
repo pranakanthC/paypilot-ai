@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from . import db
 from .paypal_client import PayPalClient
 
-READ_TOOLS = {"get_order", "get_capture", "list_local_transactions"}
+READ_TOOLS = {"get_order", "get_capture", "list_local_transactions", "list_pending_actions"}
 WRITE_TOOLS = {"create_order", "capture_order", "refund_capture", "create_invoice"}
 
 _AMOUNT_RE = re.compile(r"^(?:0|[1-9]\d{0,8})(?:\.\d{1,2})?$")
@@ -122,6 +122,10 @@ class GetCaptureArgs(BaseModel):
 
 
 class ListLocalTransactionsArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ListPendingActionsArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
@@ -244,6 +248,7 @@ VALIDATORS: dict[str, type[BaseModel]] = {
     "get_order": GetOrderArgs,
     "get_capture": GetCaptureArgs,
     "list_local_transactions": ListLocalTransactionsArgs,
+    "list_pending_actions": ListPendingActionsArgs,
     "create_order": CreateOrderArgs,
     "capture_order": CaptureOrderArgs,
     "refund_capture": RefundCaptureArgs,
@@ -331,6 +336,23 @@ TOOL_SCHEMAS: list[dict] = [
                 "List orders, captures, refunds and invoices that were created "
                 "through this PayPilot instance. Useful when the user does not "
                 "know an ID."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_pending_actions",
+            "description": (
+                "List actions that have been proposed but not yet approved or "
+                "rejected. Each entry shows the action type, amount, currency, "
+                "description and status. Use this when the user asks about pending "
+                "approvals, the approval queue, or actions awaiting review."
             ),
             "parameters": {
                 "type": "object",
@@ -489,6 +511,8 @@ async def execute_tool(
         return await client.get_capture(args["capture_id"])
     if tool == "list_local_transactions":
         return {"transactions": db.list_transactions(limit=50)}
+    if tool == "list_pending_actions":
+        return {"actions": db.list_pending_actions("pending")}
     if tool == "create_order":
         return await client.create_order(
             amount=args["amount"],
@@ -533,6 +557,8 @@ def summarize_step(tool: str, args: dict) -> str:
         return f"Looked up capture {args.get('capture_id')}"
     if tool == "list_local_transactions":
         return "Listed local transactions"
+    if tool == "list_pending_actions":
+        return "Listed pending approval actions"
     labels = {
         "create_order": "Create order",
         "capture_order": "Capture order",

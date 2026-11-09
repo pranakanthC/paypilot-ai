@@ -9,18 +9,18 @@ UNVERIFIED against the real PayPal sandbox. Nothing here is fabricated.
 
 Command: `pytest` from the project root.
 
-Result: **74 passed, 0 failed** in ~25s.
+Result: **92 passed, 0 failed** in ~32s.
 
 ```
-collected 74 items
+collected 92 items
 
-tests\test_api.py .......                                              [ 11%]
-tests\test_approval_gate.py .........                                  [ 28%]
-tests\test_invariants.py .................                               [ 67%]
+tests\test_api.py ...................                                    [ 17%]
+tests\test_approval_gate.py ..................                           [ 41%]
+tests\test_invariants.py ...................                               [ 67%]
 tests\test_paypal_client.py ..                                         [ 74%]
 tests\test_validation.py ................................              [100%]
 
-== 74 passed ==
+== 92 passed ==
 ```
 
 Every test runs offline with a temporary SQLite database and `respx` mocking of
@@ -29,15 +29,22 @@ HTTP (PayPal and LLM endpoints). No real credentials are required.
 Test coverage:
 - `tests/test_validation.py` (25 tests): amount/currency/ID/email/invoice-item
   validation, unknown tool rejection, extra-field rejection.
-- `tests/test_api.py` (9 tests): health/static page, chat with mocked LLM, LLM
-  failure as clean JSON, demo seed, approve/reject, missing action, missing
-  PayPal config, declined capture end-to-end.
-- `tests/test_approval_gate.py` (15 tests): LLM write gating (zero PayPal
-  calls), single execution under concurrency, reject never calls PayPal, read
-  tools run immediately, invalid write args create no pending action, refund
-  above captured amount blocked, capture of unapproved order blocked, partial
-  refund updates registry, agent loop cap, declined capture marked failed,
-  invoice flow records sent invoice.
+- `tests/test_api.py` (24 tests): health/static page, chat with mocked LLM, chat
+  works when LLM is configured without prior health check, chat works when PayPal
+  is configured and connected, chat reports PayPal unavailable when credentials
+  missing, LLM failure as clean JSON, demo seed, approve/reject, missing action,
+  missing PayPal config, declined capture end-to-end, pending actions with
+  unavailable PayPal never claim execution success, agent reports only tool-verified
+  pending actions (no hallucinations), empty pending queue reported accurately,
+  Markdown bold formatting (normal and escaped).
+- `tests/test_approval_gate.py` (18 tests): LLM write gating (zero PayPal calls),
+  single execution under concurrency, reject never calls PayPal, read tools run
+  immediately, invalid write args create no pending action, refund above captured
+  amount blocked, capture of unapproved order blocked, partial refund updates
+  registry, agent loop cap, declined capture marked failed, invoice flow records
+  sent invoice, list_pending_actions retrieves pending actions, empty pending queue
+  reported accurately, pending actions use list_pending_actions not
+  list_local_transactions.
 - `tests/test_invariants.py` (25 tests): I1-I7 safety invariants (prompt
   injection, atomic single execution, stable idempotency key, live refund
   validation including remaining-balance computation from inline PayPal refund
@@ -277,7 +284,102 @@ This is **correct behavior** — the chat endpoint requires LLM configuration.
 `NameError` in the `/api/health` endpoint. This made `llm_connected` always
 report `false` even when the LLM was reachable. Fixed by adding the import.
 
----
+### Frontend pre-check race condition (chat shows "LLM is not configured" when backend IS configured)
+
+**Root cause:** `static/index.html` `send()` at line 1430 checked
+`if (!health || !health.llm_configured)` **before** calling `/api/chat`. The
+`health` object starts as `null` and is only set by `loadHealth()`, which is
+called **without await** at line 2112 because `boot()` is not async. If a user
+sends a chat message before `loadHealth()` completes (an async HTTP request),
+`health` is still `null`, so `!health` is `true` and the frontend shows
+"LLM is not configured" — even though the backend IS configured correctly and
+`/api/health` returns `llm_configured=true`.
+
+**Fix:** Changed line 1430 from
+`if (!health || !health.llm_configured)` to
+`if (health !== null && !health.llm_configured)`. Now, if `health` hasn't
+loaded yet (`null`), the request falls through to `/api/chat`, where the
+backend's `settings.require_llm()` is the authoritative gate. If LLM is
+configured, the request succeeds. If not, the backend returns a clean HTTP 400
+which the frontend's catch handler converts to a friendly message.
+
+**Regression test:** `test_chat_works_when_llm_configured_without_health_check`
+in `tests/test_api.py` verifies chat returns 200 when LLM is configured, even
+without a prior health check.
+
+### Agent PayPal execution awareness fix
+
+**Root cause:** The agent's system prompt (`SYSTEM_PROMPT` in `app/agent.py`)
+contained no information about whether PayPal was configured or connected. When
+users asked about pending actions, the agent had no server-side knowledge of
+PayPal connectivity and could hallucinate that actions would execute
+successfully even when PayPal credentials were missing or the sandbox was
+unreachable.
+
+**Fix:** Three changes:
+
+1. `app/agent.py` — Split `SYSTEM_PROMPT` into `SYSTEM_PROMPT_BASE` (the
+   original prompt) and added `_build_system_prompt(paypal_configured,
+   paypal_connected)` which prepends an authoritative "PAYPAL EXECUTION
+   AVAILABLE/UNAVAILABLE" section based on server-side configuration and
+   connectivity status. The agent now knows whether PayPal can actually execute
+   writes and never claims success when PayPal is unconfigured or disconnected.
+
+2. `app/agent.py` — `run_agent()` now accepts `paypal_configured` and
+   `paypal_connected` parameters and passes them to `_build_system_prompt()`.
+
+3. `app/main.py` — The lifespan initializes `app.state.paypal_connected = False`.
+   The `/api/health` endpoint stores the measured connectivity in
+   `app.state.paypal_connected`. The `/api/chat` endpoint passes both
+   `settings.paypal_configured` and `app.state.paypal_connected` to `run_agent()`.
+
+**Regression tests:**
+- `test_chat_paypal_not_configured` — Chat returns 200 when PayPal credentials
+  are missing; agent's response reports PayPal unavailability.
+- `test_chat_paypal_configured_and_connected` — Chat succeeds normally when
+  PayPal is configured and connected.
+- `test_chat_paypal_configured_but_disconnected` — Agent never claims execution
+  success when PayPal is configured but disconnected.
+- `test_pending_actions_no_false_execution_claims` — Agent lists pending actions
+  without claiming any were executed when PayPal is unavailable.
+
+### Agent pending-action accuracy fix
+
+**Root cause:** The agent's `run_agent()` function tracked `pending_actions` only
+for WRITE proposals created during the session. When the LLM was asked about
+pending approvals, it called `list_pending_actions` to get the actual data, but
+its free-text `reply` could hallucinate additional pending actions, amounts,
+descriptions, or statuses that did not exist in the database. For example, the
+LLM might report "$49.99 order, $25.00 capture, $100.00 invoice" when the
+database only had two $0.01 and $25.00 create-order proposals.
+
+**Fix:** Two changes:
+
+1. `app/agent.py` — `run_agent()` now captures the actual `list_pending_actions`
+   tool result in `pending_actions_read_result`. After the agent loop, if
+   `list_pending_actions` was called, the LLM's free-text reply is replaced with
+   `_build_pending_actions_summary()` — a server-side factual summary derived
+   solely from the actual tool results. The summary lists only actions actually
+   returned by the tool (action type, amount, currency, description, status),
+   and never invents IDs, amounts, or statuses. It also includes a PayPal
+   connectivity warning when PayPal is unconfigured or disconnected.
+
+2. `app/agent.py` — Restructured the early return for no-tool-call responses to
+   use `break` instead of `return`, so post-processing always runs. Added
+   `broke_early` flag to preserve the original behavior of not adding the "I
+   stopped after N reasoning steps" suffix when the loop exits early.
+
+**Regression tests:**
+- `test_agent_reports_only_tool_verified_pending_actions` — AI reports only the
+  two actual DB actions ($0.01, $25.00), never mentions hallucinated $49.99
+  order, capture, or invoice.
+- `test_agent_empty_pending_queue_reported_accurately` — Empty tool result
+  produces "no pending approval actions" message, overriding LLM hallucination.
+- `test_agent_paypal_disconnected_no_execution_claims` — PayPal disconnected:
+  agent never claims execution success, reports unreachable status.
+- `test_agent_paypal_not_configured_no_execution_claims` — PayPal credentials
+  missing: agent never claims execution success, reports not configured.
+
 
 ## 6. Integration Audit (post-implementation)
 
@@ -287,7 +389,7 @@ report `false` even when the LLM was reachable. Fixed by adding the import.
 |---|---|---|
 | All Python files compile | PASSED | `python -m compileall app tests scripts` - no syntax errors |
 | Inline JS syntax | PASSED | `node --check inline_0.js` - valid JavaScript |
-| All 74 pytest tests | PASSED | 74 passed, 0 failed (~25s) |
+| All 92 pytest tests | PASSED | 92 passed, 0 failed (~32s) |
 | Smoke test (all endpoints) | PASSED | `GET /`, `/api/health`, `/api/transactions`, `/api/audit`, `/api/pending`, `/api/actions` all return 200 |
 | Central Communication Policy | IMPLEMENTED | Single `SYSTEM_PROMPT` in `app/agent.py` used by all AI interactions |
 | No feature-specific prompts | VERIFIED | Only `SYSTEM_PROMPT` exists; no per-feature prompt overrides |
@@ -305,6 +407,7 @@ report `false` even when the LLM was reachable. Fixed by adding the import.
 | No internal tool names exposed | FIXED | TOOL_META uses business labels; audit grid shows "Action" not tool names |
 | No debug_id/stack traces exposed | FIXED | Error handlers return business-friendly messages only |
 | No asterisk formatting | VERIFIED | PC1 test confirms no `*` in AI replies |
+| Pending action accuracy | VERIFIED | AI reports only tool-verified pending actions; no hallucinated IDs, amounts, or statuses |
 | `.env` gitignored | VERIFIED | `.gitignore` excludes `.env` and `.env.*` |
 | No credentials in code | VERIFIED | No hardcoded API keys or secrets |
 

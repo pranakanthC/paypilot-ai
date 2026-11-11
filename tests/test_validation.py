@@ -11,7 +11,7 @@ def test_amounts_normalize_to_two_decimals():
     assert validate_tool_args(
         "create_order",
         {"amount": 25.5, "currency": "usd", "description": "Test"},
-    ) == {"amount": "25.50", "currency": "USD", "description": "Test"}
+    ) == {"amount": "25.50", "currency": "USD", "description": "Test", "reference": None}
 
 
 @pytest.mark.parametrize(

@@ -267,7 +267,8 @@ def extract_currency(text: str) -> tuple[Optional[str], Optional[str]]:
 def extract_description(text: str) -> Optional[str]:
     """Extract an optional description from ``text``.
 
-    Looks for text following 'for', 'called', 'named', 'description:'.
+    Looks for text following 'for', 'called', 'named', 'description:',
+    'with description', or bare 'description'.
     Returns None if no description text is found.
     """
     if not text:
@@ -276,6 +277,8 @@ def extract_description(text: str) -> Optional[str]:
         r"\bfor\s+([A-Za-z][A-Za-z0-9 _-]{1,40}?)(?:\s*(?:and\s+|\.|,|$|in\s+USD|in\s+EUR|in\s+INR|in\s+GBP|in\s+JPY|in\s+CAD|in\s+AUD|for\s+capture|for\s+refund|for\s+invoice))",
         r"\b(?:called|named)\s+([A-Za-z][A-Za-z0-9 _-]{1,40}?)(?:\s*(?:\.|,|$|and\s+|for\s+capture|for\s+refund|for\s+invoice))",
         r"\bdescription\s*:\s*([A-Za-z][A-Za-z0-9 _-]{1,40}?)(?:\s*(?:\.|,|$|and\s+|for\s+capture|for\s+refund|for\s+invoice))",
+        r"\bwith\s+description\s+([A-Za-z][A-Za-z0-9 _-]{1,40}?)(?:\s*(?:\.|,|$|and\s+|for\s+capture|for\s+refund|for\s+invoice))",
+        r"\bdescription\s+([A-Za-z][A-Za-z0-9 _-]{1,40}?)(?:\s*(?:\.|,|$|and\s+|for\s+capture|for\s+refund|for\s+invoice))",
     ]
     for pattern in patterns:
         match = re.search(pattern, text, re.IGNORECASE)
@@ -284,6 +287,39 @@ def extract_description(text: str) -> Optional[str]:
             if desc and len(desc) >= 2:
                 return desc
     return None
+
+
+def extract_reference(text: str) -> Optional[str]:
+    """Extract or generate a unique reference from ``text``.
+
+    If the user explicitly asks for a unique reference (e.g. "generate a
+    unique reference", "create a reference", "assign a reference"), a
+    collision-resistant identifier is generated using UUID4.
+
+    Returns the reference string or None if no reference was requested.
+    """
+    if not text:
+        return None
+    lower = text.lower()
+    # Check for explicit reference generation requests
+    reference_triggers = [
+        "generate a unique reference",
+        "generate unique reference",
+        "create a unique reference",
+        "create unique reference",
+        "unique reference",
+        "reference number",
+        "order reference",
+        "payment reference",
+        "transaction reference",
+    ]
+    if not any(trigger in lower for trigger in reference_triggers):
+        return None
+    # Generate a collision-resistant reference: ORD + 8 hex chars from UUID4
+    import uuid
+
+    ref = f"ORD-{uuid.uuid4().hex[:8].upper()}"
+    return ref
 
 
 _ID_STOPWORDS = frozenset({
@@ -478,6 +514,28 @@ def _has_negation(text: str) -> bool:
     return any(w in stripped for w in _NEGATION_WORDS)
 
 
+def _negates_write_action(text: str) -> bool:
+    """Check if negation specifically targets a write action (create/capture/refund/invoice).
+
+    Negation about execution (e.g. "do not execute the PayPal write") does NOT
+    block write intent because the proposal-only design already handles
+    "no PayPal write" naturally - proposals are never executed without approval.
+    Only negation of the write action itself (e.g. "do not create") blocks it.
+    """
+    lower = text.lower()
+    stripped = _APPROVAL_GATING_RE.sub(" ", lower)
+    stripped = " ".join(stripped.split())
+
+    # Check if any negation word is immediately followed by a write verb
+    words = stripped.split()
+    for i, word in enumerate(words):
+        if word in _NEGATION_WORDS and i + 1 < len(words):
+            next_word = words[i + 1].strip(".,;:!?")
+            if next_word in _WRITE_VERBS:
+                return True
+    return False
+
+
 def _has_hypothetical(text: str) -> bool:
     lower = text.lower()
     for phrase in _HYPOTHETICAL_PHRASES:
@@ -499,7 +557,7 @@ def _has_educational(text: str) -> bool:
 # --------------------------------------------------------------------------- #
 
 _WRITE_VERBS = frozenset(
-    {"create", "created", "make", "made", "new", "place", "send", "refund", "refunded", "capture", "captured", "charge", "bill", "invoice", "pay"}
+    {"create", "created", "make", "made", "new", "place", "refund", "refunded", "capture", "captured", "charge", "bill", "invoice", "pay"}
 )
 _READ_VERBS = frozenset(
     {"show", "list", "check", "view", "get", "lookup", "look", "status", "balance", "see", "find", "retrieve", "investigate"}
@@ -516,15 +574,19 @@ def _detect_single_operation(text: str) -> dict[str, Any]:
     lower = text.lower()
     ambiguity = None
 
-    # Negation guard
+    # Negation guard - only block if negation targets the write action itself.
+    # Negation about execution (e.g. "do not execute") does not block WRITE
+    # because the proposal-only design already handles "no PayPal write" naturally.
     if _has_negation(lower):
-        return {
-            "classification": GENERAL,
-            "tool": None,
-            "args": {},
-            "missing": [],
-            "ambiguity": "negated request",
-        }
+        if _negates_write_action(lower):
+            return {
+                "classification": GENERAL,
+                "tool": None,
+                "args": {},
+                "missing": [],
+                "ambiguity": "negated request",
+            }
+        # Negation is about execution or something else - proceed with write detection
 
     # Hypothetical guard
     if _has_hypothetical(lower):
@@ -552,28 +614,61 @@ def _detect_single_operation(text: str) -> dict[str, Any]:
     found_read_verbs = [v for v in _READ_VERBS if re.search(rf"\b{v}\b", lower)]
     found_read_nouns = [n for n in _READ_NOUNS if re.search(rf"\b{n}\b", lower)]
 
-    # Multiple write operations in one message: cannot safely determine which
-    # operation applies to which parameters. Split by conjunction words first,
-    # then count how many segments contain verbs. Multiple segments with verbs
-    # means multiple operations.
-    verb_words = set(_WRITE_VERBS)
-    segments = re.split(r'\b(?:and|then|&)\b', lower, flags=re.IGNORECASE)
-    verb_segment_count = sum(
-        1 for seg in segments
-        if any(v in seg.split() for v in _WRITE_VERBS)
-    )
-    if len(segments) > 1 and verb_segment_count > 1:
-        return {
-            "classification": UNCLEAR,
-            "tool": None,
-            "args": {},
-            "missing": [],
-            "ambiguity": "multiple write operations in one request",
-        }
+    # If a write verb appears right after a read verb (e.g. "View capture X"),
+    # treat it as a noun (the object being viewed), not as a write verb.
+    for rv in found_read_verbs:
+        if re.search(rf"\b{rv}\s+capture\b", lower):
+            found_verbs = [v for v in found_verbs if v != "capture"]
+            break
 
-    # Read intent: read verb + read noun. If there's a read verb and a read
-    # noun, the user is asking to retrieve information, not write.
-    if found_read_verbs and found_read_nouns:
+    # Write intent takes precedence over read intent. If there are write
+    # verbs and nouns, the user wants to perform a write operation regardless
+    # of any read-related words (e.g. "show me" in "show me the action ID").
+    # However, if a read verb appears BEFORE any write verb in the text
+    # (e.g. "Look up order X and then capture it"), the read action comes
+    # first and should take precedence.
+    if found_verbs and found_nouns:
+        # Multiple write operations in one message: cannot safely determine
+        # which operation applies to which parameters. Split by conjunction
+        # words first, then count how many segments contain verbs. Multiple
+        # segments with verbs means multiple operations.
+        verb_words = set(_WRITE_VERBS)
+        segments = re.split(r'\b(?:and|then|&)\b', lower, flags=re.IGNORECASE)
+        verb_segment_count = sum(
+            1 for seg in segments
+            if any(v in seg.split() for v in _WRITE_VERBS)
+        )
+        if len(segments) > 1 and verb_segment_count > 1:
+            return {
+                "classification": UNCLEAR,
+                "tool": None,
+                "args": {},
+                "missing": [],
+                "ambiguity": "multiple write operations in one request",
+            }
+
+        # If both read and write verbs are present, check which appears first
+        # in the text. The first action verb determines the intent.
+        first_read_pos = min(
+            (lower.find(v) for v in found_read_verbs),
+            default=len(lower),
+        )
+        first_write_pos = min(
+            (lower.find(v) for v in found_verbs),
+            default=len(lower),
+        )
+        if first_read_pos < first_write_pos:
+            return {
+                "classification": READ,
+                "tool": None,
+                "args": {},
+                "missing": [],
+                "ambiguity": None,
+            }
+        pass  # Proceed to write tool determination below
+    # Read intent: read verb + read noun. Only applies when there's no
+    # write intent.
+    elif found_read_verbs and found_read_nouns:
         return {
             "classification": READ,
             "tool": None,
@@ -643,6 +738,11 @@ def _detect_single_operation(text: str) -> dict[str, Any]:
         # Description is optional
         if description:
             args["description"] = description
+
+        # Reference is optional; generate one if the user asks for it
+        reference = extract_reference(text)
+        if reference:
+            args["reference"] = reference
 
     elif tool == "capture_order":
         order_id, oid_err = extract_order_id(text)
@@ -716,6 +816,35 @@ def _detect_single_operation(text: str) -> dict[str, Any]:
     }
 
 
+_PROMPT_INJECTION_PHRASES = frozenset(
+    {
+        "ignore all previous instructions",
+        "disregard everything",
+        "ignore everything",
+        "forget everything",
+        "system override",
+        "you are now in admin mode",
+        "new instructions",
+        "ignore prior instructions",
+        "ignore previous instructions",
+    }
+)
+
+
+def _is_prompt_injection(text: str) -> bool:
+    """Detect prompt injection attempts that try to override system instructions.
+
+    Returns True if the text contains phrases commonly used in prompt injection
+    attacks (e.g. "IGNORE ALL PREVIOUS INSTRUCTIONS"). Such text must be treated
+    as GENERAL — no financial action of any kind may be taken.
+    """
+    lower = text.lower()
+    for phrase in _PROMPT_INJECTION_PHRASES:
+        if phrase in lower:
+            return True
+    return False
+
+
 def detect_write_intent(
     text: str,
     *,
@@ -740,6 +869,12 @@ def detect_write_intent(
         Classification and extracted parameters.
     """
     if not text or not text.strip():
+        return IntentResult(GENERAL)
+
+    # Prompt injection guard: never act on untrusted text that attempts to
+    # override system instructions. Treat as GENERAL so no financial action
+    # of any kind is taken.
+    if _is_prompt_injection(text):
         return IntentResult(GENERAL)
 
     result = _detect_single_operation(text)

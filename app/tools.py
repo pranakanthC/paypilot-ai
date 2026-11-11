@@ -137,6 +137,7 @@ class CreateOrderArgs(BaseModel):
     amount: str
     currency: str
     description: str = Field(min_length=1, max_length=127)
+    reference: Optional[str] = None
 
     @field_validator("amount", mode="before")
     @classmethod
@@ -524,6 +525,7 @@ async def execute_tool(
             currency=args["currency"],
             description=args["description"],
             request_id=request_id,
+            reference=args.get("reference"),
         )
     if tool == "capture_order":
         return await client.capture_order(

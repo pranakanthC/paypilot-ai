@@ -23,8 +23,10 @@ from app.agent import (
     POTENTIAL_WRITE,
     WRITE,
     _resolve_contextual_write_intent,
+    detect_write_intent,
     run_agent,
 )
+from app.intent import GENERAL
 from app.paypal_client import PayPalClient, PayPalError
 from app.services import ConflictError
 from tests.test_approval_gate import ORDER_ID, order_json
@@ -1669,3 +1671,278 @@ async def test_failed_persistence_returns_error_reply(env):
         # If persistence failed, reply should not claim the action is awaiting approval
         reply_lower = result.get("reply", "").lower()
         assert "awaiting approval" not in reply_lower or "error" in reply_lower
+
+
+# --------------------------------------------------------------------------- #
+# 18. WRITE intent resolution - all supported write tools resolve correctly
+# --------------------------------------------------------------------------- #
+
+
+def test_detect_write_intent_create_order_resolves():
+    """create_order intent resolves correctly with dynamic amount/currency/description."""
+    result = detect_write_intent("Create a 42.50 EUR order for consulting services.")
+    assert result.classification == WRITE
+    assert result.tool == "create_order"
+    assert result.args["amount"] == "42.50"
+    assert result.args["currency"] == "EUR"
+    assert result.args["description"] == "consulting services"
+    assert result.missing == []
+    assert not result.requires_clarification
+
+
+def test_detect_write_intent_capture_order_resolves():
+    """capture_order intent resolves correctly with order_id."""
+    result = detect_write_intent("Capture order ORD-12345ABCDE.")
+    assert result.classification == WRITE
+    assert result.tool == "capture_order"
+    assert result.args["order_id"] == "ORD-12345ABCDE"
+    assert result.missing == []
+    assert not result.requires_clarification
+
+
+def test_detect_write_intent_refund_capture_resolves():
+    """refund_capture intent resolves correctly with capture_id."""
+    result = detect_write_intent("Refund capture CAP-67890FGHIJ.")
+    assert result.classification == WRITE
+    assert result.tool == "refund_capture"
+    assert result.args["capture_id"] == "CAP-67890FGHIJ"
+    assert result.missing == []
+    assert not result.requires_clarification
+
+
+def test_detect_write_intent_create_invoice_resolves():
+    """create_invoice intent resolves correctly with recipient_email/currency/items."""
+    result = detect_write_intent(
+        "Create invoice for a@example.com in USD for 2 x widgets at $10.00."
+    )
+    assert result.classification == WRITE
+    assert result.tool == "create_invoice"
+    assert result.args["recipient_email"] == "a@example.com"
+    assert result.args["currency"] == "USD"
+    assert "items" in result.args
+    assert len(result.args["items"]) == 1
+    assert result.args["items"][0]["name"] == "widgets"
+    assert result.args["items"][0]["quantity"] == 2
+    assert result.args["items"][0]["unit_amount"] == "10.00"
+    assert result.missing == []
+    assert not result.requires_clarification
+
+
+def test_detect_write_intent_missing_amount_clarifies():
+    """create_order without amount triggers clarification, not a pending action."""
+    result = detect_write_intent("Create an order for a test purchase in USD.")
+    assert result.classification == POTENTIAL_WRITE
+    assert result.tool == "create_order"
+    assert "amount" in result.missing
+    assert result.requires_clarification
+
+
+def test_detect_write_intent_missing_currency_clarifies():
+    """create_order without currency triggers clarification, not a pending action."""
+    result = detect_write_intent("Create order for 10.00 for a test purchase.")
+    assert result.classification == POTENTIAL_WRITE
+    assert result.tool == "create_order"
+    assert "currency" in result.missing
+    assert result.requires_clarification
+
+
+def test_all_write_tools_have_validators():
+    """Every WRITE tool has a corresponding validator in VALIDATORS dict."""
+    from app.tools import VALIDATORS, WRITE_TOOLS
+    for tool in WRITE_TOOLS:
+        assert tool in VALIDATORS, f"Missing validator for {tool}"
+        model = VALIDATORS[tool]
+        assert model is not None, f"Validator for {tool} is None"
+
+
+# --------------------------------------------------------------------------- #
+# 19. Write tool dispatch - no PayPal write at proposal time
+# --------------------------------------------------------------------------- #
+
+
+async def test_create_order_proposal_no_paypal_write(env):
+    """Proposing a create_order does not call PayPal create_order API."""
+    orders_called = False
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post(LLM_URL).mock(side_effect=[])
+        _mock_token(mock)
+        orders = mock.post(ORDERS_URL).mock(
+            return_value=httpx.Response(
+                201,
+                json={
+                    "id": "ORD-NO-WRITE",
+                    "status": "CREATED",
+                    "amount": {"currency_code": "USD", "value": "10.00"},
+                },
+            )
+        )
+        client = PayPalClient()
+        try:
+            result = await run_agent(
+                "Create order for 10.00 USD",
+                client=client,
+            )
+        finally:
+            await client.aclose()
+
+    assert orders.call_count == 0
+    actions = _pending_actions()
+    assert len(actions) == 1
+    assert actions[0]["tool"] == "create_order"
+    assert actions[0]["status"] == "pending"
+
+
+async def test_create_order_get_actions_returns_same_id(env):
+    """GET /api/actions returns the same action ID as the chat response."""
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post(LLM_URL).mock(side_effect=[])
+        _mock_token(mock)
+        client = PayPalClient()
+        try:
+            result = await run_agent(
+                "Create order for 7.50 GBP",
+                client=client,
+            )
+        finally:
+            await client.aclose()
+
+    action_id = result["pending_actions"][0]["id"]
+
+    # Verify the same action appears in list_transactions (db-level check)
+    actions = db.list_pending_actions("pending")
+    assert len(actions) == 1
+    assert actions[0]["id"] == action_id
+    assert actions[0]["tool"] == "create_order"
+    assert actions[0]["status"] == "pending"
+    assert actions[0]["args"]["amount"] == "7.50"
+    assert actions[0]["args"]["currency"] == "GBP"
+
+    # Verify audit log entry exists
+    audit = db.list_audit()
+    proposal_audits = [
+        a for a in audit if a["tool"] == "create_order" and a["actor"] == "agent"
+    ]
+    assert len(proposal_audits) >= 1
+    assert proposal_audits[0]["request_id"] == actions[0]["request_id"]
+
+
+# --------------------------------------------------------------------------- #
+# 20. Browser-reported failure: do not execute PayPal write
+# --------------------------------------------------------------------------- #
+
+
+def test_detect_write_intent_browser_message():
+    """The exact browser message with 'Do not execute the PayPal write'
+    should classify as WRITE (proposal only), not GENERAL, because negation
+    targets execution, not the write action itself."""
+    message = (
+        "Create an order for 350 USD with description Runtime integration test. "
+        "Generate a unique reference. Save the proposal and show me the actual "
+        "persisted action ID and request ID. Do not execute the PayPal write."
+    )
+    result = detect_write_intent(message)
+    assert result.classification == WRITE
+    assert result.tool == "create_order"
+    assert result.args["amount"] == "350.00"
+    assert result.args["currency"] == "USD"
+    assert result.args["description"] == "Runtime integration test"
+    assert "reference" in result.args
+    assert result.args["reference"].startswith("ORD-")
+    assert len(result.args["reference"]) == 12  # ORD- + 8 hex chars
+    assert result.missing == []
+    assert not result.requires_clarification
+
+
+def test_detect_write_intent_do_not_create_blocks():
+    """Genuine negation of the write action itself ('do not create') blocks WRITE."""
+    result = detect_write_intent("Do not create an order.")
+    assert result.classification == GENERAL
+    assert result.tool is None
+
+
+def test_detect_write_intent_capture_with_do_not_execute():
+    """Capture order with 'do not execute' proceeds as WRITE (proposal only)."""
+    result = detect_write_intent("Capture order ORD-123 but do not execute it.")
+    assert result.classification == WRITE
+    assert result.tool == "capture_order"
+    assert result.args["order_id"] == "ORD-123"
+    assert result.missing == []
+
+
+def test_detect_write_intent_refund_with_do_not_send():
+    """Refund capture with 'do not send' proceeds as WRITE (proposal only)."""
+    result = detect_write_intent("Refund capture CAP-456 but do not send it.")
+    assert result.classification == WRITE
+    assert result.tool == "refund_capture"
+    assert result.args["capture_id"] == "CAP-456"
+    assert result.missing == []
+
+
+async def test_browser_message_creates_pending_action(env):
+    """Exact browser request creates exactly one pending action in the database."""
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post(LLM_URL).mock(side_effect=[])
+        _mock_token(mock)
+        client = PayPalClient()
+        try:
+            result = await run_agent(
+                "Create an order for 350 USD with description Runtime integration test. "
+                "Generate a unique reference. Save the proposal and show me the actual "
+                "persisted action ID and request ID. Do not execute the PayPal write.",
+                client=client,
+            )
+        finally:
+            await client.aclose()
+
+    # No PayPal write at proposal time
+    actions = _pending_actions()
+    assert len(actions) == 1
+    action = actions[0]
+    assert action["tool"] == "create_order"
+    assert action["status"] == "pending"
+    assert action["args"]["amount"] == "350.00"
+    assert action["args"]["currency"] == "USD"
+    assert "request_id" in action and action["request_id"]
+
+    # Verify persisted in database
+    stored = db.get_pending_action(action["id"])
+    assert stored is not None
+    assert stored["id"] == action["id"]
+    assert stored["tool"] == "create_order"
+    assert stored["status"] == "pending"
+    assert stored["args"]["amount"] == "350.00"
+    assert stored["args"]["currency"] == "USD"
+
+    # Verify audit record exists
+    audit = db.list_audit()
+    proposal_audits = [
+        a for a in audit if a["tool"] == "create_order" and a["actor"] == "agent"
+    ]
+    assert len(proposal_audits) >= 1
+    assert proposal_audits[0]["request_id"] == action["request_id"]
+
+
+async def test_all_write_intents_resolve(env):
+    """All supported WRITE intents resolve correctly through the deterministic path."""
+    test_cases = [
+        ("Create order for 10.00 USD", "create_order", {"amount": "10.00", "currency": "USD"}),
+        ("Capture order ORD-ABC123", "capture_order", {"order_id": "ORD-ABC123"}),
+        ("Refund capture CAP-XYZ789", "refund_capture", {"capture_id": "CAP-XYZ789"}),
+        ("Create invoice for a@example.com in EUR for 2 x widgets at 10.00", "create_invoice", {"recipient_email": "a@example.com", "currency": "EUR"}),
+    ]
+
+    with respx.mock(assert_all_called=False) as mock:
+        mock.post(LLM_URL).mock(side_effect=[])
+        _mock_token(mock)
+        client = PayPalClient()
+        try:
+            for message, expected_tool, expected_args in test_cases:
+                result = await run_agent(message, client=client)
+                actions = _pending_actions()
+                assert len(actions) >= 1, f"Expected pending action for: {message}"
+                last_action = actions[-1]
+                assert last_action["tool"] == expected_tool, f"Expected {expected_tool}, got {last_action['tool']} for: {message}"
+                for key, val in expected_args.items():
+                    assert last_action["args"].get(key) == val, f"Expected {key}={val} for: {message}"
+        finally:
+            await client.aclose()

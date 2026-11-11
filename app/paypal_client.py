@@ -215,13 +215,17 @@ class PayPalClient:
         currency: str,
         description: str,
         request_id: Optional[str] = None,
+        reference: Optional[str] = None,
     ) -> dict:
+        full_description = description
+        if reference:
+            full_description = f"{description} (Ref: {reference})"
         body = {
             "intent": "CAPTURE",
             "purchase_units": [
                 {
                     "amount": {"currency_code": currency, "value": amount},
-                    "description": description,
+                    "description": full_description,
                 }
             ],
             "payment_source": {

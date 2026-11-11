@@ -1152,6 +1152,7 @@
   let selectedTxnId = null;
   let lastOrderId = null;
   let demoSeed = null;
+  let demoActionId = null;
   let health = null;
   let loading = { actions: true, transactions: true, audit: true };
 
@@ -1515,6 +1516,13 @@
     renderLifecycle();
   }
 
+  function provenanceMeta(p) {
+    const v = String(p || "unknown").toLowerCase();
+    if (v === "paypal_verified") return { key: "paypal_verified", label: "PayPal Resource ID", short: "PayPal-verified", tone: "ok" };
+    if (v === "local") return { key: "local", label: "Local Reference", short: "Local", tone: "warn" };
+    return { key: "unknown", label: "Unverified Reference", short: "Unverified origin", tone: "neutral" };
+  }
+
   function stageIndex(kind, status) {
     const value = String(status || "").toUpperCase();
     if (kind === "invoice") return value === "SENT" ? 1 : 0;
@@ -1541,7 +1549,7 @@
       detail.innerHTML =
         '<div class="empty-state">' + ICONS.money +
         '<strong>No transaction selected</strong>' +
-        '<span>Seed a demo order or ask the copilot to investigate a PayPal ID. The lifecycle appears here with live status.</span></div>';
+        '<span>Seed a demo order or ask the copilot to investigate a transaction reference. The lifecycle appears here with live status.</span></div>';
       centerActions.innerHTML =
         '<button class="btn btn-sm" id="emptySeedBtn" type="button">' + ICONS.bolt + ' Seed demo order</button>';
       const seedBtn = $("#emptySeedBtn");
@@ -1551,6 +1559,7 @@
 
     const kind = txn.kind;
     const status = (txn.status || "").toUpperCase();
+    const prov = provenanceMeta(txn.provenance);
     const labels = kind === "invoice"
       ? ["Drafted", "Sent", "Paid", "Closed"]
       : kind === "refund"
@@ -1560,7 +1569,7 @@
     const failed = ["FAILED", "DECLINED", "DENIED"].includes(status);
     const tone = statusTone(status);
 
-    kindLabel.textContent = kind + (txn.paypal_id ? " · " + shortId(txn.paypal_id) : "");
+    kindLabel.textContent = kind + (txn.paypal_id ? " Â· " + shortId(txn.paypal_id) : "");
     stepper.innerHTML = labels.map(function (label, i) {
       const state = failed && i === index ? "failed" : i < index ? "done" : i === index ? "current" : "";
       const glyph = i < index ? ICONS.check : (i === index && failed ? ICONS.alert : String(i + 1));
@@ -1568,15 +1577,15 @@
     }).join("");
 
     selectedRow.innerHTML = (txn.paypal_id
-      ? '<span class="copy-row" style="flex:1"><span class="k">ID</span><code>' + esc(txn.paypal_id) + '</code><button class="copy-btn" id="copySelectedId" type="button" title="Copy ID">' + ICONS.copy + '</button></span>'
-      : '<span class="copy-row" style="flex:1"><span class="k">ID</span><code>—</code></span>');
+      ? '<span class="copy-row" style="flex:1"><span class="k">' + esc(prov.label) + '</span><code>' + esc(txn.paypal_id) + '</code><button class="copy-btn" id="copySelectedId" type="button" title="Copy reference">' + ICONS.copy + '</button></span>'
+      : '<span class="copy-row" style="flex:1"><span class="k">' + esc(prov.label) + '</span><code>\u2014</code></span>');
     const copySelected = $("#copySelectedId");
     if (copySelected) copySelected.addEventListener("click", function () { copyText(txn.paypal_id); });
 
     detail.innerHTML =
       '<div class="detail-top">' +
         '<div class="detail-amount"><div class="label">' + esc(kind) + ' amount</div>' +
-          '<div class="value">' + esc(txn.amount || "—") + '<small>' + esc(txn.currency || "") + '</small></div>' +
+          '<div class="value">' + esc(txn.amount || "\u2014") + '<small>' + esc(txn.currency || "") + '</small></div>' +
         '</div>' +
         '<div class="spacer"></div>' +
         '<span class="status-pill-lg tone-' + tone + '"><span class="dot"></span>' + esc(status || "UNKNOWN") + '</span>' +
@@ -1584,8 +1593,10 @@
       '<div class="meta-grid">' +
         '<div class="meta-item"><div class="k">Kind</div><div class="v">' + esc(kind) + '</div></div>' +
         '<div class="meta-item"><div class="k">Created</div><div class="v">' + esc(fmtTime(txn.created_at)) + '</div></div>' +
-        '<div class="meta-item full"><div class="k">Parent</div><div class="v">' + esc(txn.parent_id || "—") + '</div></div>' +
-        '<div class="meta-item full"><div class="k">Description</div><div class="v" style="white-space:normal">' + esc(txn.description || "—") + '</div></div>' +
+        '<div class="meta-item full"><div class="k">Provenance</div><div class="v"><span class="mini-pill tone-' + prov.tone + '"><span class="dot"></span>' + esc(prov.short) + '</span> <span style="color:var(--muted);font-size:11px">' + esc(prov.label) + '</span></div></div>' +
+        '<div class="meta-item full"><div class="k">' + esc(prov.label) + '</div><div class="v mono" style="white-space:normal;word-break:break-all">' + esc(txn.paypal_id || "\u2014") + '</div></div>' +
+        '<div class="meta-item full"><div class="k">Parent</div><div class="v">' + esc(txn.parent_id || "\u2014") + '</div></div>' +
+        '<div class="meta-item full"><div class="k">Description</div><div class="v" style="white-space:normal">' + esc(txn.description || "\u2014") + '</div></div>' +
       '</div>';
 
     centerActions.innerHTML = "";
@@ -1789,6 +1800,13 @@
       showCardResult(card, "Executed and recorded in the audit log. " + resultMsg, "ok");
       toast("Action approved and executed exactly once.", "ok");
       await refreshAll();
+      // Record the real PayPal order ID only when a create_order was approved
+      // and PayPal returned a genuine order identifier. Never set it from a
+      // proposal or from a rejected/failed action.
+      if (action.tool === "create_order" && result.id) {
+        lastOrderId = result.id;
+        try { localStorage.setItem("paypilot.lastOrderId", lastOrderId); } catch (e) {}
+      }
     } catch (e) {
       button.innerHTML = original;
       button.disabled = false;
@@ -1908,9 +1926,10 @@
       columnDefs: [
         { field: "created_at", headerName: "Created", minWidth: 150, valueFormatter: function (p) { return fmtTime(p.value); } },
         { field: "kind", headerName: "Kind", width: 92 },
-        { field: "paypal_id", headerName: "PayPal ID", minWidth: 150, flex: 1 },
+        { field: "provenance", headerName: "Provenance", minWidth: 150, valueFormatter: function (p) { return provenanceMeta(p.value).short; }, cellRenderer: function (p) { const m = provenanceMeta(p.value); const span = document.createElement("span"); span.className = "mini-pill tone-" + m.tone; span.innerHTML = '<span class="dot"></span>' + esc(m.short); span.title = m.label; return span; } },
+        { field: "paypal_id", headerName: "Reference", minWidth: 170, flex: 1, valueGetter: function (p) { return p.data ? p.data.paypal_id : ""; }, cellRenderer: function (p) { const d = p.data || {}; const m = provenanceMeta(d.provenance); const wrap = document.createElement("div"); wrap.style.display = "flex"; wrap.style.flexDirection = "column"; wrap.style.gap = "2px"; wrap.style.lineHeight = "1.2"; const id = document.createElement("span"); id.className = "mono"; id.textContent = d.paypal_id || "\u2014"; const lbl = document.createElement("span"); lbl.style.fontSize = "10px"; lbl.style.color = "var(--muted)"; lbl.textContent = m.label; wrap.appendChild(id); wrap.appendChild(lbl); return wrap; } },
         { field: "status", headerName: "Status", width: 132, cellRenderer: statusCellRenderer },
-        { field: "amount", headerName: "Amount", width: 88, valueFormatter: function (p) { return p.value ? p.value : "—"; } },
+        { field: "amount", headerName: "Amount", width: 88, valueFormatter: function (p) { return p.value ? p.value : "\u2014"; } },
         { field: "currency", headerName: "Cur", width: 64 },
         { field: "description", headerName: "Description", minWidth: 160, flex: 1.2 }
       ],
@@ -1923,7 +1942,15 @@
         { field: "actor", headerName: "Actor", width: 112 },
         { field: "tool", headerName: "Action", width: 138, valueFormatter: function (p) { return esc(actionLabel(p.value)); } },
         { field: "status", headerName: "Status", width: 120, cellRenderer: statusCellRenderer },
-        { field: "message", headerName: "Outcome", minWidth: 180, flex: 1.2, valueFormatter: function (p) { return esc(p.value || ""); } }
+        { field: "message", headerName: "Outcome", minWidth: 180, flex: 1.2, valueFormatter: function (p) {
+            const d = p.data || {};
+            if (d.error && d.error.message) return esc(d.error.message);
+            if (d.result) {
+                if (d.result.message) return esc(d.result.message);
+                if (d.result.status) return esc(String(d.result.status));
+            }
+            return "";
+        } }
       ],
       rowData: []
     }, common));
@@ -2002,27 +2029,57 @@
       return;
     }
 
-    const url = demoSeed.approval_url && /^https:\/\//.test(demoSeed.approval_url) ? demoSeed.approval_url : "";
-    const orderId = demoSeed.order && demoSeed.order.id ? demoSeed.order.id : "";
+    const action = demoSeed.action || {};
+    const actionId = action.id || "";
+    const actionStatus = (action.status || "").toUpperCase();
+    const hasApprovedOrder = !!lastOrderId;
     body.innerHTML =
-      '<div class="demo-hero"><h4>Sandbox order created</h4><p>' + esc(demoSeed.instructions || "Open the approval link, approve with a sandbox buyer, then return here.") + '</p></div>' +
+      '<div class="demo-hero"><h4>Sandbox order proposal created</h4><p>' + esc(demoSeed.instructions || "Approve the pending action to create the PayPal sandbox order. No payment is executed until you approve.") + '</p></div>' +
       '<div class="demo-meta">' +
-        '<div class="copy-row"><span class="k">ORDER</span><code>' + esc(orderId || "—") + '</code><button class="copy-btn" id="copyDemoOrder" type="button" title="Copy order id">' + ICONS.copy + '</button></div>' +
+        '<div class="copy-row"><span class="k">ACTION</span><code>' + esc(actionId || "—") + '</code><button class="copy-btn" id="copyDemoAction" type="button" title="Copy action id">' + ICONS.copy + '</button></div>' +
+        '<div class="copy-row"><span class="k">STATUS</span><code>' + esc(actionStatus || "—") + '</code></div>' +
       '</div>' +
-      (url ? '<a class="demo-link" href="' + esc(url) + '" target="_blank" rel="noopener">' + ICONS.external + ' Open PayPal approval page</a>' : '<div class="demo-note">No approval link was returned. Check the PayPal order in the sandbox dashboard.</div>') +
+      (hasApprovedOrder ?
+        '<div class="demo-meta">' +
+          '<div class="copy-row"><span class="k">ORDER</span><code>' + esc(lastOrderId || "—") + '</code><button class="copy-btn" id="copyDemoOrderId" type="button" title="Copy PayPal order id">' + ICONS.copy + '</button></div>' +
+        '</div>' :
+        ''
+      ) +
       '<div class="demo-row">' +
-        '<button id="declineBtn" class="btn btn-danger" type="button">' + ICONS.alert + ' Simulate declined capture</button>' +
-        '<button id="investigateBtn" class="btn" type="button">' + ICONS.send + ' Investigate with copilot</button>' +
+        '<button id="viewActionBtn" class="btn btn-sm" type="button">' + ICONS.send + ' Open in approval queue</button>' +
       '</div>' +
-      '<div class="demo-note">The decline is queued as a normal pending action with the sandbox <code>PayPal-Mock-Response</code> header. Approve it to see PayPal reject the write; nothing is retried.</div>' +
-      '<div class="demo-row"><button id="seedAgainBtn" class="btn btn-sm" type="button">' + ICONS.refresh + ' Seed another order</button></div>';
-    const copy = $("#copyDemoOrder");
-    if (copy) copy.addEventListener("click", function () { copyText(orderId); });
+      (hasApprovedOrder ?
+        '<div class="demo-row">' +
+          '<button id="declineBtn" class="btn btn-danger" type="button">' + ICONS.alert + ' Simulate declined capture</button>' +
+          '<button id="investigateBtn" class="btn" type="button">' + ICONS.send + ' Investigate with copilot</button>' +
+        '</div>' :
+        '<div class="demo-note">Approve the pending action in the queue to create the PayPal sandbox order. No payment is created until you approve.</div>'
+      ) +
+      '<div class="demo-row"><button id="seedAgainBtn" class="btn btn-sm" type="button">' + ICONS.refresh + ' Seed another proposal</button></div>';
+    const copy = $("#copyDemoAction");
+    if (copy) copy.addEventListener("click", function () { copyText(actionId); });
+    const copyOrder = $("#copyDemoOrderId");
+    if (copyOrder) copyOrder.addEventListener("click", function () { copyText(lastOrderId); });
     $("#seedAgainBtn").addEventListener("click", seedDemoOrder);
-    $("#declineBtn").addEventListener("click", proposeDecline);
-    $("#investigateBtn").addEventListener("click", function () {
+    const viewBtn = $("#viewActionBtn");
+    if (viewBtn) {
+      viewBtn.addEventListener("click", function () {
+        closeDemoModal();
+        if (actionId) {
+          const card = document.querySelector('[data-action-id="' + actionId + '"]');
+          if (card) {
+            card.scrollIntoView({ behavior: "smooth", block: "center" });
+            card.classList.add("flash");
+          }
+        }
+      });
+    }
+    const declineBtn = $("#declineBtn");
+    if (declineBtn) declineBtn.addEventListener("click", proposeDecline);
+    const investigateBtn = $("#investigateBtn");
+    if (investigateBtn) investigateBtn.addEventListener("click", function () {
       closeDemoModal();
-      if (orderId) send("Investigate order " + orderId + " using live PayPal data. Explain the exact status and numbers.");
+      send("Investigate order " + lastOrderId + " using live PayPal data. Cite the exact status and amounts.");
     });
   }
 
@@ -2032,16 +2089,18 @@
     try {
       const data = await api("/api/demo/seed", { method: "POST", body: "{}" });
       demoSeed = data;
-      lastOrderId = data.order ? data.order.id : null;
-      if (lastOrderId) {
-        try { localStorage.setItem("paypilot.lastOrderId", lastOrderId); } catch (e) {}
-      }
-      toast("Sandbox order created. Approve it with a sandbox buyer account.", "ok");
+      demoActionId = data.action && data.action.id ? data.action.id : null;
+      lastOrderId = null;
+      toast("Sandbox order proposal queued for your approval.", "ok");
       renderDemoModal();
       await refreshAll();
-      if (lastOrderId) {
-        const row = transactions.find(function (item) { return item.paypal_id === lastOrderId; });
-        if (row) selectTransaction(row);
+      // Highlight the pending card in the existing approval queue
+      if (demoActionId) {
+        const card = document.querySelector('[data-action-id="' + demoActionId + '"]');
+        if (card) {
+          card.scrollIntoView({ behavior: "smooth", block: "center" });
+          card.classList.add("flash");
+        }
       }
     } catch (e) {
       const error = (e.payload && e.payload.error) || {};
@@ -2058,7 +2117,7 @@
   }
 
   async function proposeDecline() {
-    if (!lastOrderId) { toast("Seed a sandbox order first.", "warn"); return; }
+    if (!lastOrderId) { toast("The sandbox order proposal must first be approved before a capture can be queued. Approve the pending action, then try again.", "warn"); return; }
     const button = $("#declineBtn");
     if (button) { button.disabled = true; button.textContent = "Queueing…"; }
     try {
@@ -2121,6 +2180,21 @@
     document.addEventListener("keydown", function (event) {
       if (event.key === "Escape") closeDemoModal();
     });
+    try {
+      if (window.location.hash === "#demo") openDemoModal();
+    } catch (e) {}
+  }
+
+  function applyDemoAvailability() {
+    const enabled = !!(health && health.demo_enabled);
+    const btn = $("#demoBtn");
+    const modal = $("#demoModal");
+    if (btn) {
+      btn.style.display = enabled ? "" : "none";
+      btn.disabled = !enabled;
+      if (!enabled) btn.title = "Demo mode is disabled in this deployment.";
+    }
+    if (!enabled && modal) modal.classList.remove("show");
   }
 
   function boot() {
@@ -2130,7 +2204,10 @@
       "assistant",
       "I am your payment operations copilot. I read live PayPal sandbox data, explain what actually happened, and propose writes. Every write waits for your explicit approval — I never execute one on my own. Ask me to investigate an order or capture, or use Demo mode for a guided run."
     );
-    loadHealth();
+    loadHealth().then(function () {
+      applyDemoAvailability();
+      if (window.location.hash === "#demo" && health && health.demo_enabled) openDemoModal();
+    });
     loadActions();
     loadTransactions();
     loadAudit();
@@ -2138,7 +2215,6 @@
     renderQueue();
     renderActivity();
     renderSafety();
-    if (window.location.hash === "#demo") openDemoModal();
   }
 
   boot();

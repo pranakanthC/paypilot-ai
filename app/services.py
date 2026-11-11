@@ -154,6 +154,12 @@ async def validate_business_rules(
     if tool == "capture_order":
         order = await client.get_order(args["order_id"])
         status = (order.get("status") or "").upper()
+        if status == "COMPLETED":
+            raise BusinessValidationError(
+                f"Order {args['order_id']} is already COMPLETED and has been "
+                "captured. A capture cannot be executed twice.",
+                {"order_id": args["order_id"], "status": status},
+            )
         if status != "APPROVED":
             raise BusinessValidationError(
                 f"Order {args['order_id']} is {status or 'UNKNOWN'} and cannot be "
@@ -164,46 +170,113 @@ async def validate_business_rules(
     return None
 
 
+def _validated_paypal_id(value: Any) -> Optional[str]:
+    if isinstance(value, str):
+        text = value.strip()
+        if text:
+            return text
+    return None
+
+
 def record_transactions(tool: str, args: dict, result: dict) -> None:
-    """Update the local registry after a successfully executed action."""
+    """Update the local registry after a successfully executed action.
+
+    Records are marked ``paypal_verified`` only when a successful, validated
+    PayPal API response establishes the resource ID and relevant details. If a
+    required PayPal resource ID cannot be established from the response, the
+    record is stored as unverified/local provenance (never falsely verified).
+    """
     if tool == "create_order":
+        paypal_id = _validated_paypal_id((result or {}).get("id"))
+        trusted = paypal_id is not None
+        evidence = (
+            db.VerifiedResourceEvidence(
+                kind="order",
+                paypal_id=paypal_id,
+                status=(result or {}).get("status"),
+                amount=args.get("amount") or (result or {}).get("amount"),
+                currency=args.get("currency") or (result or {}).get("currency"),
+                description=args.get("description"),
+                raw_response=result,
+            )
+            if trusted
+            else None
+        )
         db.add_transaction(
             kind="order",
-            paypal_id=result.get("id"),
-            status=result.get("status"),
-            amount=args.get("amount") or result.get("amount"),
-            currency=args.get("currency") or result.get("currency"),
+            paypal_id=paypal_id,
+            status=(result or {}).get("status"),
+            amount=args.get("amount") or (result or {}).get("amount"),
+            currency=args.get("currency") or (result or {}).get("currency"),
             description=args.get("description"),
+            provenance=db.PROVENANCE_PAYPAL_VERIFIED if trusted else db.PROVENANCE_UNKNOWN,
+            verified_evidence=evidence,
         )
         return
 
     if tool == "capture_order":
         order_id = args["order_id"]
-        captures = result.get("captures") or []
+        captures = (result or {}).get("captures") or []
         for capture in captures:
+            capture_id = _validated_paypal_id((capture or {}).get("id"))
+            trusted = capture_id is not None
+            evidence = (
+                db.VerifiedResourceEvidence(
+                    kind="capture",
+                    paypal_id=capture_id,
+                    status=(capture or {}).get("status"),
+                    amount=(capture or {}).get("amount"),
+                    currency=(capture or {}).get("currency"),
+                    description=f"Capture of order {order_id}",
+                    parent_id=order_id,
+                    raw_response=capture,
+                )
+                if trusted
+                else None
+            )
             db.add_transaction(
                 kind="capture",
-                paypal_id=capture.get("id"),
+                paypal_id=capture_id,
                 parent_id=order_id,
-                status=capture.get("status"),
-                amount=capture.get("amount"),
-                currency=capture.get("currency"),
+                status=(capture or {}).get("status"),
+                amount=(capture or {}).get("amount"),
+                currency=(capture or {}).get("currency"),
                 description=f"Capture of order {order_id}",
+                provenance=db.PROVENANCE_PAYPAL_VERIFIED if trusted else db.PROVENANCE_UNKNOWN,
+                verified_evidence=evidence,
             )
         if captures:
-            db.update_transaction_status(order_id, result.get("status") or "COMPLETED")
+            db.update_transaction_status(order_id, (result or {}).get("status") or "COMPLETED")
         return
 
     if tool == "refund_capture":
         capture_id = args["capture_id"]
+        refund_id = _validated_paypal_id((result or {}).get("id"))
+        trusted = refund_id is not None
+        evidence = (
+            db.VerifiedResourceEvidence(
+                kind="refund",
+                paypal_id=refund_id,
+                status=(result or {}).get("status"),
+                amount=(result or {}).get("amount") or args.get("amount"),
+                currency=(result or {}).get("currency"),
+                description=args.get("note") or f"Refund of capture {capture_id}",
+                parent_id=capture_id,
+                raw_response=result,
+            )
+            if trusted
+            else None
+        )
         db.add_transaction(
             kind="refund",
-            paypal_id=result.get("id"),
+            paypal_id=refund_id,
             parent_id=capture_id,
-            status=result.get("status"),
-            amount=result.get("amount") or args.get("amount"),
-            currency=result.get("currency"),
+            status=(result or {}).get("status"),
+            amount=(result or {}).get("amount") or args.get("amount"),
+            currency=(result or {}).get("currency"),
             description=args.get("note") or f"Refund of capture {capture_id}",
+            provenance=db.PROVENANCE_PAYPAL_VERIFIED if trusted else db.PROVENANCE_UNKNOWN,
+            verified_evidence=evidence,
         )
         try:
             capture = db.list_transactions(limit=10000)
@@ -232,8 +305,11 @@ def record_transactions(tool: str, args: dict, result: dict) -> None:
         return
 
     if tool == "create_invoice":
-        invoice = result.get("invoice") or {}
-        sent = result.get("sent") or {}
+        invoice = (result or {}).get("invoice") or {}
+        sent = (result or {}).get("sent") or {}
+        invoice_id = _validated_paypal_id(invoice.get("id"))
+        # Draft invoice ID comes from a successful PayPal create-draft response.
+        trusted = invoice_id is not None
         total = invoice.get("amount")
         if not total:
             try:
@@ -245,13 +321,28 @@ def record_transactions(tool: str, args: dict, result: dict) -> None:
                 )
             except (InvalidOperation, KeyError, TypeError, ValueError):
                 total = None
+        evidence = (
+            db.VerifiedResourceEvidence(
+                kind="invoice",
+                paypal_id=invoice_id,
+                status=invoice.get("status"),
+                amount=total,
+                currency=invoice.get("currency") or args.get("currency"),
+                description=f"Invoice to {args.get('recipient_email')}",
+                raw_response=invoice,
+            )
+            if trusted
+            else None
+        )
         db.add_transaction(
             kind="invoice",
-            paypal_id=invoice.get("id"),
+            paypal_id=invoice_id,
             status="SENT" if sent.get("sent") else invoice.get("status"),
             amount=total,
             currency=invoice.get("currency") or args.get("currency"),
             description=f"Invoice to {args.get('recipient_email')}",
+            provenance=db.PROVENANCE_PAYPAL_VERIFIED if trusted else db.PROVENANCE_UNKNOWN,
+            verified_evidence=evidence,
         )
 
 

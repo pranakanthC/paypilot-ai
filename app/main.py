@@ -19,9 +19,9 @@ from . import db, services
 from .agent import LLMError, run_agent
 from .config import BASE_DIR, ConfigError, get_settings, llm_chat_url
 from .paypal_client import PayPalClient, PayPalError
+from .services import NotFoundError
 from .tools import (
     ToolValidationError,
-    execute_tool,
     validate_tool_args,
 )
 
@@ -125,6 +125,7 @@ async def unhandled_error_handler(request: Request, exc: Exception) -> JSONRespo
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     history: Optional[list[dict[str, Any]]] = None
+    session_id: Optional[str] = None
 
 
 class DemoSeedRequest(BaseModel):
@@ -210,6 +211,7 @@ async def health() -> dict:
         "paypal_base_url": settings.paypal_base_url,
         "llm_model": settings.llm_model,
         "database": str(settings.db_path),
+        "demo_enabled": settings.demo_enabled,
     }
 
 
@@ -224,6 +226,7 @@ async def chat(payload: ChatRequest, request: Request) -> dict:
         settings=settings,
         paypal_configured=settings.paypal_configured,
         paypal_connected=getattr(request.app.state, "paypal_connected", False),
+        session_id=payload.session_id,
     )
     return result
 
@@ -271,7 +274,15 @@ async def audit() -> dict:
 async def demo_seed(
     request: Request, payload: Optional[DemoSeedRequest] = None
 ) -> dict:
+    """Demo endpoint (disabled by default for production safety).
+
+    When explicitly enabled via ENABLE_DEMO_MODE, queues a create-order proposal
+    for approval. No direct PayPal call is made. Disabled by default to prevent
+    demo functionality/data in production.
+    """
     settings = get_settings()
+    if not settings.demo_enabled:
+        raise NotFoundError("Demo endpoints are disabled.")
     settings.require_paypal()
     data = payload or DemoSeedRequest()
     args = validate_tool_args(
@@ -283,32 +294,35 @@ async def demo_seed(
         },
     )
     request_id = uuid.uuid4().hex
-    result = await execute_tool(
-        "create_order", args, request.app.state.paypal, request_id=request_id
-    )
-    services.record_transactions("create_order", args, result)
-    db.log_audit("user", "create_order", args, result, request_id=request_id)
-    approval_url = result.get("approval_url")
-    instructions = (
-        "Open the approval link and log in with a PayPal sandbox personal "
-        "(buyer) account that belongs to the same sandbox as the app. Approve "
-        f"the payment, then ask PayPilot to investigate order {result.get('id')}."
+    action = db.create_pending_action("create_order", args, request_id=request_id)
+    db.log_audit(
+        "demo",
+        "create_order",
+        args,
+        {"status": "pending_approval", "action_id": action["id"]},
+        request_id=request_id,
     )
     return {
-        "order": result,
-        "approval_url": approval_url,
-        "instructions": instructions,
+        "action": action,
         "sandbox": True,
+        "instructions": (
+            "A create-order proposal has been queued for your approval. "
+            f"Approve it via /api/actions/{action['id']}/approve to create the "
+            "PayPal sandbox order. No payment is created until you approve."
+        ),
     }
 
 
 @app.post("/api/demo/decline")
 async def demo_decline(payload: DemoDeclineRequest) -> dict:
-    """Create a pending capture proposal that PayPal will decline in sandbox.
+    """Demo endpoint (disabled by default for production safety).
 
-    This never calls PayPal: it only queues a normal, approval-gated action with
-    the sandbox mock code so the failure path can be demonstrated reliably.
+    When explicitly enabled via ENABLE_DEMO_MODE, queues a capture proposal with
+    sandbox mock decline code for approval. No direct PayPal call is made.
     """
+    settings = get_settings()
+    if not settings.demo_enabled:
+        raise NotFoundError("Demo endpoints are disabled.")
     args = validate_tool_args(
         "capture_order",
         {
@@ -331,6 +345,34 @@ async def demo_decline(payload: DemoDeclineRequest) -> dict:
             "Approve this proposal to see PayPal reject the capture with "
             "INSTRUMENT_DECLINED. The failure is audited and nothing is retried."
         ),
+    }
+
+
+@app.get("/api/paypal/return", include_in_schema=False)
+async def paypal_return() -> dict:
+    """PayPal redirects the buyer here after they approve an order.
+
+    Read-only: no payment state is changed here. Capture still requires an
+    explicit merchant-side approval through /api/actions/{id}/approve.
+    """
+    return {
+        "status": "ok",
+        "message": (
+            "Buyer approved the PayPal order. Return to PayPilot and approve "
+            "the pending capture action to complete the payment."
+        ),
+    }
+
+
+@app.get("/api/paypal/cancel", include_in_schema=False)
+async def paypal_cancel() -> dict:
+    """PayPal redirects the buyer here after they cancel an order.
+
+    Read-only: no payment state is changed here.
+    """
+    return {
+        "status": "canceled",
+        "message": "The buyer canceled the PayPal order approval.",
     }
 
 

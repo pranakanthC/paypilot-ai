@@ -137,3 +137,37 @@ async def test_refund_request_and_normalization(env):
         "update_time": None,
         "links": [],
     }
+
+
+async def test_create_order_uses_experience_context_not_application_context(env):
+    """create_order must send buyer experience in payment_source.paypal.experience_context,
+    not the deprecated application_context, and must use user_action CONTINUE."""
+    captured_body = {}
+
+    def create_order_handler(request):
+        captured_body.update(json.loads(request.content))
+        return httpx.Response(201, json=order_json())
+
+    async with respx.mock(assert_all_called=False) as mock:
+        mock.post(TOKEN_URL).mock(
+            return_value=httpx.Response(
+                200, json={"access_token": "tok", "expires_in": 32400}
+            )
+        )
+        mock.post(ORDERS_URL).mock(side_effect=create_order_handler)
+
+        client = PayPalClient()
+        try:
+            await client.create_order("10.00", "USD", "Test order")
+        finally:
+            await client.aclose()
+
+    body = captured_body
+    assert body["intent"] == "CAPTURE"
+    assert "application_context" not in body, "application_context is deprecated"
+    experience = body["payment_source"]["paypal"]["experience_context"]
+    assert experience["brand_name"] == "PayPilot AI"
+    assert experience["shipping_preference"] == "NO_SHIPPING"
+    assert experience["user_action"] == "CONTINUE", "must not auto-capture (PAY_NOW)"
+    assert experience["return_url"] == "http://127.0.0.1:8000/api/paypal/return"
+    assert experience["cancel_url"] == "http://127.0.0.1:8000/api/paypal/cancel"

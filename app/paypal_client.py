@@ -224,10 +224,16 @@ class PayPalClient:
                     "description": description,
                 }
             ],
-            "application_context": {
-                "brand_name": "PayPilot AI",
-                "shipping_preference": "NO_SHIPPING",
-                "user_action": "PAY_NOW",
+            "payment_source": {
+                "paypal": {
+                    "experience_context": {
+                        "brand_name": "PayPilot AI",
+                        "shipping_preference": "NO_SHIPPING",
+                        "user_action": "CONTINUE",
+                        "return_url": "http://127.0.0.1:8000/api/paypal/return",
+                        "cancel_url": "http://127.0.0.1:8000/api/paypal/cancel",
+                    }
+                }
             },
         }
         data = await self._request(

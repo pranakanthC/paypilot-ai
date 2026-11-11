@@ -10,13 +10,18 @@ It performs live calls against https://api-m.sandbox.paypal.com and prints the
 result of each. No live-money credentials are ever used. Sandbox only.
 
 Mark each result VERIFIED or UNVERIFIED in VERIFICATION.md after running.
+
+The script retrieves an existing sandbox order (4KX64890GG2954126) and prints
+its buyer approval URL so you can open it in a browser to approve the order.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -31,13 +36,33 @@ import httpx  # noqa: E402  (import after path setup)
 from app.config import get_settings  # noqa: E402
 
 
+# Existing PayPal Sandbox order to verify/approve. No new order is created.
+EXISTING_ORDER_ID = "4KX64890GG2954126"
+
+
 def show(label: str, ok: bool, detail: str = "") -> None:
     status = "VERIFIED" if ok else "FAILED"
     extra = f" - {detail}" if detail else ""
     print(f"[{status}] {label}{extra}")
 
 
-def main() -> int:
+def extract_approval_url(order: dict) -> Optional[str]:
+    """Return the buyer approval URL from a PayPal order's links, if present.
+
+    Prefers rel="approve" and falls back to rel="payer-action". Returns None
+    when no approval link is available (order may already be approved/completed).
+    """
+    links = order.get("links") or []
+    for rel in ("approve", "payer-action"):
+        for link in links:
+            if link.get("rel") == rel:
+                href = link.get("href")
+                if href:
+                    return href
+    return None
+
+
+async def main() -> int:
     settings = get_settings()
     if not settings.paypal_configured:
         print("ERROR: PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET are missing in .env")
@@ -52,79 +77,63 @@ def main() -> int:
     from app.paypal_client import PayPalClient, PayPalError  # noqa: E402
 
     client = PayPalClient(settings)
+    oid = EXISTING_ORDER_ID
+    approval_url: Optional[str] = None
+    cap_id: Optional[str] = None
+
     try:
         # 1. OAuth2 token
         total += 1
         try:
-            token = client.get_access_token()
+            token = await client.get_access_token()
+            # Never print the access token value itself.
             show("OAuth2 token", bool(token), "token cached")
             results += 1 if token else 0
         except PayPalError as exc:
             show("OAuth2 token", False, f"{exc.name}: {exc.message}")
 
-        # 2. Create order
+        # 2. Retrieve the existing sandbox order by ID (no new order created).
         total += 1
         try:
-            order = client.create_order(
-                "10.00",
-                "USD",
-                "verify_sandbox.py order",
-                request_id="verify-1",
-            )
-            oid = order.get("id")
-            show("Create order", bool(oid), f"id={oid} status={order.get('status')}")
-            results += 1 if oid else 0
-        except PayPalError as exc:
-            show("Create order", False, f"{exc.name}: {exc.message} (debug_id={exc.debug_id})")
-            oid = None
-
-        # 3. Get order
-        if oid:
-            total += 1
-            try:
-                got = client.get_order(oid)
-                show(
-                    "Get order",
-                    bool(got.get("id")),
-                    f"status={got.get('status')} amount={got.get('amount')} {got.get('currency')}",
-                )
-                results += 1 if got.get("id") else 0
-            except PayPalError as exc:
-                show("Get order", False, f"{exc.name}: {exc.message} (debug_id={exc.debug_id})")
-
-        # 4. Idempotency: retry the same create_order with the same request_id
-        total += 1
-        try:
-            again = client.create_order(
-                "10.00",
-                "USD",
-                "verify_sandbox.py order",
-                request_id="verify-1",
-            )
+            order = await client.get_order(oid)
+            approval_url = extract_approval_url(order)
             show(
-                "Idempotency key reuse",
-                again.get("id") == oid,
-                f"retry id={again.get('id')} original id={oid}",
+                "Get existing order",
+                bool(order.get("id")),
+                f"id={oid} status={order.get('status')}",
             )
-            results += 1 if again.get("id") == oid else 0
+            results += 1 if order.get("id") else 0
         except PayPalError as exc:
-            # PayPal may return the original order on duplicate request_id (idempotent),
-            # or an error depending on timing/state. Report honestly.
             show(
-                "Idempotency key reuse",
+                "Get existing order",
                 False,
                 f"{exc.name}: {exc.message} (debug_id={exc.debug_id})",
             )
 
-        # 5. Capture order (requires buyer approval first in sandbox UI)
+        # 3. Print the buyer approval URL clearly (no secrets exposed).
         total += 1
-        if oid:
+        if approval_url:
+            print("\n=== Buyer Approval URL ===")
+            print(approval_url)
+            print("==========================\n")
+            print(
+                "Open the URL above in a browser to approve the order in the "
+                "PayPal sandbox buyer UI."
+            )
+            show("Approval URL", True, "printed above")
+            results += 1
+        else:
+            show("Approval URL", False, "no approve/payer-action link in order")
+
+        # 4. Capture order (requires buyer approval first in sandbox UI)
+        total += 1
+        if oid and approval_url:
             print(
                 "  NOTE: Capture requires you to approve order "
-                f"{oid} in the PayPal sandbox buyer UI first."
+                f"{oid} via the URL above first."
             )
             try:
-                captured = client.capture_order(oid, request_id=f"{oid}-capture")
+                captured = await client.capture_order(oid, request_id=f"{oid}-capture")
                 cap_id = None
                 for cu in (captured.get("purchase_units") or []):
                     for c in (cu.get("captures") or []):
@@ -141,16 +150,14 @@ def main() -> int:
                     False,
                     f"{exc.name}: {exc.message} (debug_id={exc.debug_id})",
                 )
-                cap_id = None
         else:
-            show("Capture order", False, "no order id (create failed)")
-            cap_id = None
+            show("Capture order", False, "no order id or approval URL")
 
-        # 6. Get capture
+        # 5. Get capture
         total += 1
         if cap_id:
             try:
-                cap = client.get_capture(cap_id)
+                cap = await client.get_capture(cap_id)
                 show(
                     "Get capture",
                     bool(cap.get("id")),
@@ -162,11 +169,11 @@ def main() -> int:
         else:
             show("Get capture", False, "no capture id (capture failed/skipped)")
 
-        # 7. Refund capture (partial)
+        # 6. Refund capture (partial)
         total += 1
         if cap_id:
             try:
-                refunded = client.refund_capture(
+                refunded = await client.refund_capture(
                     cap_id, amount="5.00", note="verify_sandbox.py partial refund",
                     request_id=f"{cap_id}-refund",
                 )
@@ -185,10 +192,14 @@ def main() -> int:
         else:
             show("Refund capture", False, "no capture id")
 
+    except (asyncio.TimeoutError, httpx.TimeoutException) as exc:
+        show("Sandbox verification", False, f"timeout: {type(exc).__name__}")
+        return 1
+    except PayPalError as exc:
+        show("Sandbox verification", False, f"{exc.name}: {exc.message}")
+        return 1
     finally:
-        import asyncio
-
-        asyncio.run(client.aclose())
+        await client.aclose()
 
     print(f"\n{results}/{total} live sandbox calls succeeded.")
     print("Mark each item in VERIFICATION.md section 3 as VERIFIED or UNVERIFIED.")
@@ -196,4 +207,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(asyncio.run(main()))

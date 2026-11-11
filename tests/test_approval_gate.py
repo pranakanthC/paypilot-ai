@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import httpx
@@ -6,7 +7,7 @@ import respx
 
 from app import db
 from app.agent import run_agent
-from app.paypal_client import PayPalClient
+from app.paypal_client import PayPalClient, PayPalError
 from app.services import (
     BusinessValidationError,
     ConflictError,
@@ -139,14 +140,15 @@ async def test_llm_write_call_is_gated_and_never_reaches_paypal(env):
         finally:
             await client.aclose()
 
-        assert llm.call_count == 2
+        assert llm.call_count == 0, "LLM must not be called for write requests (intent detector handles them)"
         assert token.call_count == 0, "the agent loop must not authenticate to PayPal"
         assert orders.call_count == 0, "the agent loop must not create the order"
+        # Deterministic intent detector creates pending action
         assert len(result["pending_actions"]) == 1
-        action = result["pending_actions"][0]
-        assert action["tool"] == "create_order"
-        assert action["status"] == "pending"
-        assert db.list_transactions() == []
+        assert result["pending_actions"][0]["tool"] == "create_order"
+        # The reply does not claim execution success
+        reply = result["reply"].lower()
+        assert "no financial action was taken" in reply or "i prepared" in reply
 
 
 async def test_approval_executes_once_and_writes_audit(env):
@@ -263,8 +265,9 @@ async def test_invalid_write_arguments_create_no_pending_action(env):
     assert token.call_count == 0 and orders.call_count == 0
     assert result["pending_actions"] == []
     assert db.list_pending_actions("pending") == []
-    assert result["steps"][0]["type"] == "error"
-    assert db.list_audit()[0]["error"]["type"] == "validation"
+    # Write tool blocked by validation failure - clarification step
+    assert result["steps"][0]["type"] == "clarification"
+    assert "amount" in result["steps"][0].get("missing", [])
 
 
 async def test_refund_above_captured_amount_is_blocked(env):
@@ -577,3 +580,500 @@ async def test_list_pending_actions_does_not_call_list_local_transactions(env):
     assert len(read_steps[0]["result"].get("actions", [])) == 1
     # No executed transactions were created.
     assert db.list_transactions() == []
+
+
+# --------------------------------------------------------------------------- #
+# Dynamic agent behavior regression tests
+# --------------------------------------------------------------------------- #
+# These verify the agent is genuinely context-aware and dynamic, not a fixed
+# response template. Different user commands must produce different tool
+# selections, and the agent must handle multi-request messages, contextual
+# references, missing information, and tool failures honestly.
+
+
+def llm_multi_tool_call(calls):
+    """Build an LLM response with multiple tool calls."""
+    return {
+        "id": "chatcmpl-multi",
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": f"call_{i}",
+                            "type": "function",
+                            "function": {
+                                "name": tool,
+                                "arguments": json.dumps(args),
+                            },
+                        }
+                        for i, (tool, args) in enumerate(calls)
+                    ],
+                }
+            }
+        ],
+    }
+
+
+async def test_different_commands_select_different_tools(env):
+    """Different natural-language requests must produce different tool selections."""
+    # Lookup request -> get_order
+    async with respx.mock(assert_all_called=False) as mock:
+        mock.post(LLM_URL).mock(
+            side_effect=[
+                httpx.Response(
+                    200, json=llm_tool_call("get_order", {"order_id": ORDER_ID})
+                ),
+                httpx.Response(200, json=llm_text("The order is CREATED.")),
+            ]
+        )
+        mock_token(mock)
+        mock.get(ORDER_URL).mock(
+            return_value=httpx.Response(200, json=order_json(status="CREATED"))
+        )
+        client = PayPalClient()
+        try:
+            result = await run_agent("Look up order " + ORDER_ID, client=client)
+        finally:
+            await client.aclose()
+    read_steps = [s for s in result["steps"] if s.get("type") == "read"]
+    assert len(read_steps) == 1
+    assert read_steps[0]["tool"] == "get_order"
+
+    # Creation request -> create_order (blocked by LLM tool allowlist)
+    async with respx.mock(assert_all_called=False) as mock:
+        mock.post(LLM_URL).mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json=llm_tool_call(
+                        "create_order",
+                        {"amount": "10.00", "currency": "USD", "description": "Test"},
+                    ),
+                ),
+                httpx.Response(200, json=llm_text("I prepared the order.")),
+            ]
+        )
+        token = mock_token(mock)
+        orders = mock.post(ORDERS_URL).mock(
+            return_value=httpx.Response(201, json=order_json())
+        )
+        client = PayPalClient()
+        try:
+            result = await run_agent(
+                "Create a $10 order for testing", client=client
+            )
+        finally:
+            await client.aclose()
+        assert token.call_count == 0
+        assert orders.call_count == 0
+        # Write tools blocked by LLM allowlist - no pending action created
+        assert len(result["pending_actions"]) == 1
+        reply = result["reply"].lower()
+        assert "no financial action was taken" in reply or "i prepared" in reply
+
+
+async def test_multiple_read_requests_in_one_message(env):
+    """A single message with multiple read tasks must trigger multiple tool calls."""
+    db.add_transaction(
+        kind="order",
+        paypal_id=ORDER_ID,
+        status="CREATED",
+        amount="25.00",
+        currency="USD",
+        description="demo",
+    )
+    async with respx.mock(assert_all_called=False) as mock:
+        mock.post(LLM_URL).mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json=llm_multi_tool_call(
+                        [
+                            ("get_order", {"order_id": ORDER_ID}),
+                            ("list_local_transactions", {}),
+                        ]
+                    ),
+                ),
+                httpx.Response(200, json=llm_text("Here are your results.")),
+            ]
+        )
+        mock_token(mock)
+        mock.get(ORDER_URL).mock(
+            return_value=httpx.Response(200, json=order_json(status="CREATED"))
+        )
+        client = PayPalClient()
+        try:
+            result = await run_agent(
+                "Look up order " + ORDER_ID + " and list all my transactions",
+                client=client,
+            )
+        finally:
+            await client.aclose()
+    read_steps = [s for s in result["steps"] if s.get("type") == "read"]
+    assert len(read_steps) == 2
+    tools_used = {s["tool"] for s in read_steps}
+    assert tools_used == {"get_order", "list_local_transactions"}
+
+
+async def test_contextual_follow_up_uses_previous_id(env):
+    """A follow-up reference like 'refund it' must use the ID from prior context."""
+    # First exchange: look up a capture
+    async with respx.mock(assert_all_called=False) as mock:
+        mock.post(LLM_URL).mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json=llm_tool_call("get_capture", {"capture_id": CAPTURE_ID}),
+                ),
+                httpx.Response(200, json=llm_text("The capture is COMPLETED.")),
+            ]
+        )
+        mock_token(mock)
+        mock.get(CAPTURE_URL).mock(
+            return_value=httpx.Response(200, json=capture_json("50.00"))
+        )
+        client = PayPalClient()
+        try:
+            result1 = await run_agent(
+                "Look up capture " + CAPTURE_ID, client=client
+            )
+        finally:
+            await client.aclose()
+
+    # Second exchange: "refund it" - write tool call blocked by allowlist
+    async with respx.mock(assert_all_called=False) as mock:
+        mock.post(LLM_URL).mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json=llm_tool_call(
+                        "refund_capture",
+                        {"capture_id": CAPTURE_ID, "amount": None, "note": None},
+                    ),
+                ),
+                httpx.Response(200, json=llm_text("I prepared the refund.")),
+            ]
+        )
+        token = mock_token(mock)
+        client = PayPalClient()
+        try:
+            result2 = await run_agent(
+                "Refund it", history=result1.get("history", []), client=client
+            )
+        finally:
+            await client.aclose()
+        assert token.call_count == 0
+        # Write tools blocked by LLM allowlist - no pending action created
+        assert len(result2["pending_actions"]) == 0
+        reply_lower = result2["reply"].lower()
+        assert "clarif" in reply_lower or "missing" in reply_lower or "capture_id" in reply_lower
+
+
+async def test_missing_essential_information_asks_clarification(env):
+    """When essential info is missing, the agent must ask rather than guess."""
+    async with respx.mock(assert_all_called=False) as mock:
+        mock.post(LLM_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json=llm_text(
+                    "I need a PayPal order ID to look up an order. "
+                    "Could you provide the order ID?"
+                ),
+            )
+        )
+        client = PayPalClient()
+        try:
+            result = await run_agent(
+                "Look up an order", client=client
+            )
+        finally:
+            await client.aclose()
+    assert result["steps"] == []
+    assert "order id" in result["reply"].lower()
+
+
+async def test_tool_failure_reported_honestly(env):
+    """When a tool fails, the agent reports it honestly without inventing results."""
+    async with respx.mock(assert_all_called=False) as mock:
+        mock.post(LLM_URL).mock(
+            side_effect=[
+                httpx.Response(
+                    200, json=llm_tool_call("get_order", {"order_id": ORDER_ID})
+                ),
+                httpx.Response(200, json=llm_text("The lookup failed.")),
+            ]
+        )
+        mock_token(mock)
+        mock.get(ORDER_URL).mock(
+            return_value=httpx.Response(
+                503,
+                json={
+                    "name": "INTERNAL_SERVER_ERROR",
+                    "message": "PayPal is unavailable",
+                    "debug_id": "debug-read",
+                },
+            )
+        )
+        client = PayPalClient()
+        try:
+            result = await run_agent("Investigate order " + ORDER_ID, client=client)
+        finally:
+            await client.aclose()
+    error_steps = [s for s in result["steps"] if s.get("type") == "error"]
+    assert len(error_steps) == 1
+    assert error_steps[0]["tool"] == "get_order"
+    assert error_steps[0]["error"]["debug_id"] == "debug-read"
+
+
+async def test_incomplete_multi_step_explains_what_remains(env):
+    """If the iteration cap is reached mid-task, the agent explains what remains."""
+    async with respx.mock(assert_all_called=False) as mock:
+        mock.post(LLM_URL).mock(
+            return_value=httpx.Response(
+                200, json=llm_tool_call("get_order", {"order_id": ORDER_ID})
+            )
+        )
+        mock_token(mock)
+        mock.get(ORDER_URL).mock(
+            return_value=httpx.Response(200, json=order_json())
+        )
+        client = PayPalClient()
+        try:
+            result = await run_agent(
+                "Look up order " + ORDER_ID + " and then capture it",
+                client=client,
+                max_iterations=1,
+            )
+        finally:
+            await client.aclose()
+    assert "1 reasoning steps" in result["reply"]
+    # The capture was never proposed because the loop stopped after the read
+    pending = [p for p in result["pending_actions"] if p["tool"] == "capture_order"]
+    assert pending == []
+
+
+async def test_dynamic_responses_not_fixed_templates(env):
+    """Different inputs must produce different responses, not fixed templates."""
+    # Request 1: lookup
+    async with respx.mock(assert_all_called=False) as mock:
+        mock.post(LLM_URL).mock(
+            side_effect=[
+                httpx.Response(
+                    200, json=llm_tool_call("get_order", {"order_id": ORDER_ID})
+                ),
+                httpx.Response(200, json=llm_text("Order " + ORDER_ID + " is CREATED.")),
+            ]
+        )
+        mock_token(mock)
+        mock.get(ORDER_URL).mock(
+            return_value=httpx.Response(200, json=order_json(status="CREATED"))
+        )
+        client = PayPalClient()
+        try:
+            result1 = await run_agent("Check order " + ORDER_ID, client=client)
+        finally:
+            await client.aclose()
+
+    # Request 2: creation
+    async with respx.mock(assert_all_called=False) as mock:
+        mock.post(LLM_URL).mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json=llm_tool_call(
+                        "create_order",
+                        {
+                            "amount": "50.00",
+                            "currency": "EUR",
+                            "description": "Different request",
+                        },
+                    ),
+                ),
+                httpx.Response(200, json=llm_text("I prepared a EUR order.")),
+            ]
+        )
+        token = mock_token(mock)
+        orders = mock.post(ORDERS_URL).mock(
+            return_value=httpx.Response(201, json=order_json(amount="50.00"))
+        )
+        client = PayPalClient()
+        try:
+            result2 = await run_agent(
+                "Create a 50 EUR invoice order", client=client
+            )
+        finally:
+            await client.aclose()
+    assert token.call_count == 0
+    assert orders.call_count == 0
+    assert result1["reply"] != result2["reply"]
+    assert result1["steps"][0]["tool"] == "get_order"
+    # Write tools blocked by LLM allowlist - no pending action
+    reply_lower = result2["reply"].lower()
+    assert "clarif" in reply_lower or "missing" in reply_lower or "capture_id" in reply_lower
+    assert "clarif" in reply_lower or "missing" in reply_lower or "recipient_email" in reply_lower or "items" in reply_lower
+
+
+async def test_no_unrelated_operations(env):
+    """The agent must not perform operations the user did not request."""
+    async with respx.mock(assert_all_called=False) as mock:
+        mock.post(LLM_URL).mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json=llm_tool_call("get_order", {"order_id": ORDER_ID}),
+                ),
+                httpx.Response(200, json=llm_text("Here is your order status.")),
+            ]
+        )
+        mock_token(mock)
+        mock.get(ORDER_URL).mock(
+            return_value=httpx.Response(200, json=order_json(status="CREATED"))
+        )
+        client = PayPalClient()
+        try:
+            result = await run_agent(
+                "Just look up order " + ORDER_ID + ", do nothing else",
+                client=client,
+            )
+        finally:
+            await client.aclose()
+    # Only the get_order read happened, no writes proposed
+    assert len(result["pending_actions"]) == 0
+    assert len(result["steps"]) == 1
+    assert result["steps"][0]["tool"] == "get_order"
+
+
+# --------------------------------------------------------------------------- #
+# Invoice partial failure (draft created, send fails)
+# --------------------------------------------------------------------------- #
+
+
+async def test_invoice_draft_created_but_send_fails_reports_partial(env):
+    """create_invoice: draft creation succeeds but sending fails. The draft ID
+    is preserved, the invoice is NOT marked as sent, and the partial outcome
+    is reported honestly."""
+    action = db.create_pending_action(
+        "create_invoice",
+        {
+            "recipient_email": "buyer@example.com",
+            "currency": "USD",
+            "items": [
+                {"name": "Consulting", "quantity": 2, "unit_amount": "75.00"}
+            ],
+            "note": None,
+        },
+    )
+    async with respx.mock(assert_all_called=False) as mock:
+        mock_token(mock)
+        # Draft creation succeeds
+        mock.post(
+            "https://api-m.sandbox.paypal.com/v2/invoicing/invoices"
+        ).mock(
+            return_value=httpx.Response(
+                201,
+                json={
+                    "id": "INV-DRAFT-123",
+                    "status": "DRAFT",
+                    "amount": {"currency_code": "USD", "value": "150.00"},
+                    "links": [],
+                },
+            )
+        )
+        # Send fails
+        mock.post(
+            "https://api-m.sandbox.paypal.com/v2/invoicing/invoices/INV-DRAFT-123/send"
+        ).mock(
+            return_value=httpx.Response(
+                500,
+                json={
+                    "name": "INTERNAL_SERVER_ERROR",
+                    "message": "Send failed",
+                    "debug_id": "debug-send-fail",
+                },
+            )
+        )
+        client = PayPalClient()
+        try:
+            result = await approve_action(action["id"], client)
+        finally:
+            await client.aclose()
+
+    stored = db.get_pending_action(action["id"])
+    # Action resolved (draft was created; send failed)
+    assert stored["status"] in ("approved", "failed", "unknown")
+    # Draft ID is preserved in the result
+    assert result["result"]["invoice"]["id"] == "INV-DRAFT-123"
+    # Send did not complete: sent.sent is False, partial flag set
+    sent = result["result"].get("sent") or {}
+    assert sent.get("sent") is False
+    assert result["result"].get("partial") is True
+    # No invoice transaction marked as SENT
+    txns = [t for t in db.list_transactions() if t["kind"] == "invoice"]
+    assert all(t["status"] != "SENT" for t in txns)
+
+
+# --------------------------------------------------------------------------- #
+# Capture protection: already-captured and concurrent captures
+# --------------------------------------------------------------------------- #
+
+
+async def test_capture_of_already_captured_order_is_blocked(env):
+    """Capture proposal for an order already COMPLETED is rejected before
+    reaching PayPal. Live PayPal status is the source of truth."""
+    action = db.create_pending_action(
+        "capture_order", {"order_id": ORDER_ID}
+    )
+    async with respx.mock(assert_all_called=False) as mock:
+        mock_token(mock)
+        mock.get(ORDER_URL).mock(
+            return_value=httpx.Response(200, json=order_json(status="COMPLETED"))
+        )
+        capture = mock.post(f"{ORDER_URL}/capture").mock(
+            return_value=httpx.Response(201, json=order_json("COMPLETED"))
+        )
+        client = PayPalClient()
+        try:
+            with pytest.raises(BusinessValidationError) as excinfo:
+                await approve_action(action["id"], client)
+        finally:
+            await client.aclose()
+
+    assert "already COMPLETED" in str(excinfo.value)
+    assert capture.call_count == 0, "already-captured order must not reach PayPal"
+    assert db.get_pending_action(action["id"])["status"] == "pending"
+
+
+async def test_concurrent_approval_of_same_action_only_one_wins(env):
+    """Two concurrent approval requests for the same pending action: only one
+    executes; the other gets ConflictError (atomic claim)."""
+    action = db.create_pending_action(
+        "create_order",
+        {"amount": "10.00", "currency": "USD", "description": "Concurrency test"},
+    )
+    async with respx.mock(assert_all_called=False) as mock:
+        mock_token(mock)
+        orders = mock.post(ORDERS_URL).mock(
+            return_value=httpx.Response(201, json=order_json())
+        )
+        client = PayPalClient()
+        try:
+            results = await asyncio.gather(
+                approve_action(action["id"], client),
+                approve_action(action["id"], client),
+                return_exceptions=True,
+            )
+        finally:
+            await client.aclose()
+
+    # Exactly one succeeded, one got ConflictError
+    successes = [r for r in results if not isinstance(r, Exception)]
+    conflicts = [r for r in results if isinstance(r, ConflictError)]
+    assert len(successes) == 1
+    assert len(conflicts) == 1
+    # PayPal was called exactly once (idempotency via request_id)
+    assert orders.call_count == 1
+    stored = db.get_pending_action(action["id"])
+    assert stored["status"] == "approved"

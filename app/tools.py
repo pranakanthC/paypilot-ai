@@ -13,12 +13,12 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from . import db
-from .paypal_client import PayPalClient
+from .paypal_client import PayPalClient, PayPalError
 
 READ_TOOLS = {"get_order", "get_capture", "list_local_transactions", "list_pending_actions"}
 WRITE_TOOLS = {"create_order", "capture_order", "refund_capture", "create_invoice"}
 
-_AMOUNT_RE = re.compile(r"^(?:0|[1-9]\d{0,8})(?:\.\d{1,2})?$")
+_AMOUNT_RE = re.compile(r"^-?(?:0|[1-9]\d{0,8})(?:\.\d{1,2})?$")
 _CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{5,39}$")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -333,9 +333,14 @@ TOOL_SCHEMAS: list[dict] = [
         "function": {
             "name": "list_local_transactions",
             "description": (
-                "List orders, captures, refunds and invoices that were created "
-                "through this PayPilot instance. Useful when the user does not "
-                "know an ID."
+                "List local transaction records stored by this PayPilot instance "
+                "(orders, captures, refunds, invoices). Each record includes "
+                "`provenance`: `paypal_verified` (established by a successful, "
+                "validated PayPal API response), `local` (locally recorded, not "
+                "PayPal-verified), or `unknown` (exists locally but origin "
+                "unverified). Use this when the user does not know an ID or asks "
+                "about local records; distinguish local existence from PayPal "
+                "verification."
             ),
             "parameters": {
                 "type": "object",
@@ -541,11 +546,20 @@ async def execute_tool(
             note=args.get("note"),
             request_id=f"{request_id}-create" if request_id else None,
         )
-        sent = await client.send_invoice(
-            draft["id"],
-            note=args.get("note"),
-            request_id=f"{request_id}-send" if request_id else None,
-        )
+        try:
+            sent = await client.send_invoice(
+                draft["id"],
+                note=args.get("note"),
+                request_id=f"{request_id}-send" if request_id else None,
+            )
+        except PayPalError as exc:
+            # Draft was created but sending failed. Return the draft ID and the
+            # send error honestly; do not claim the invoice was sent.
+            return {
+                "invoice": draft,
+                "sent": {"sent": False, "error": exc.to_dict()},
+                "partial": True,
+            }
         return {"invoice": draft, "sent": sent}
     raise ToolValidationError(tool, f"Unknown tool: {tool}")
 

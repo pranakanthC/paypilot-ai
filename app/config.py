@@ -25,6 +25,7 @@ class Settings:
     llm_api_key: str
     llm_model: str
     db_path: Path
+    demo_enabled: bool = False
 
     @property
     def paypal_configured(self) -> bool:
@@ -54,6 +55,12 @@ def get_settings() -> Settings:
     db_path = Path(os.getenv("DB_PATH", "paypilot.db").strip() or "paypilot.db")
     if not db_path.is_absolute():
         db_path = BASE_DIR / db_path
+    demo_enabled = os.getenv("ENABLE_DEMO_MODE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     return Settings(
         paypal_client_id=os.getenv("PAYPAL_CLIENT_ID", "").strip(),
         paypal_client_secret=os.getenv("PAYPAL_CLIENT_SECRET", "").strip(),
@@ -64,6 +71,7 @@ def get_settings() -> Settings:
         llm_api_key=os.getenv("LLM_API_KEY", "").strip(),
         llm_model=os.getenv("LLM_MODEL", "deepseek-chat").strip(),
         db_path=db_path,
+        demo_enabled=demo_enabled,
     )
 
 
